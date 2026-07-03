@@ -94,7 +94,6 @@ class SpeechState(DisplayClient):
 class WakeHandler(BaseHTTPRequestHandler):
     recognizer = None
     voice = None
-    tts_config = None
     display = None
     beep_path = None
     audio_source = None
@@ -111,10 +110,8 @@ class WakeHandler(BaseHTTPRequestHandler):
         if path == "/state":
             self._send_json(update_speech_state(direction=direction_status(WakeHandler.audio_source)))
             return
-        else:
-            self.send_response(404)
-            self.end_headers()
-            return
+        self.send_response(404)
+        self.end_headers()
 
     def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -139,18 +136,22 @@ class WakeHandler(BaseHTTPRequestHandler):
             self.send_response(409)
             self.end_headers()
             return
-        threading.Thread(
-            target=run_session_thread,
-            args=(
-                WakeHandler.recognizer,
-                WakeHandler.voice,
-                WakeHandler.tts_config,
-                WakeHandler.display,
-                WakeHandler.beep_path,
-                WakeHandler.audio_source,
-            ),
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=run_session_thread,
+                args=(
+                    WakeHandler.recognizer,
+                    WakeHandler.voice,
+                    WakeHandler.display,
+                    WakeHandler.beep_path,
+                    WakeHandler.audio_source,
+                ),
+                daemon=True,
+            ).start()
+        except Exception:
+            # run_session_thread 只有在成功启动后才会释放 busy_lock。
+            WakeHandler.busy_lock.release()
+            raise
         self.send_response(202)
         self.end_headers()
 
@@ -441,10 +442,10 @@ def watch_direction_changes(state_store: SpeechState) -> None:
         time.sleep(interval)
 
 
-def run_session_thread(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
+def run_session_thread(recognizer, voice, display: SpeechState, beep_path: Path, audio_source) -> None:
     try:
         log("wake signal received")
-        run_session(recognizer, voice, tts_config, display, beep_path, audio_source)
+        run_session(recognizer, voice, display, beep_path, audio_source)
     except Exception as exc:
         log(f"session failed: {exc}", level="warning")
         if display is not None:
@@ -518,7 +519,7 @@ def wait_for_input_device(display: SpeechState) -> int | str | None:
         time.sleep(SPEECH_WAIT_POLL_SECONDS)
 
 
-def run_embedded_wake_loop(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
+def run_embedded_wake_loop(recognizer, voice, display: SpeechState, beep_path: Path, audio_source) -> None:
     log(f"loading wake-word model: {KWS_MODEL_DIR}")
     kws = create_kws()
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
@@ -529,7 +530,7 @@ def run_embedded_wake_loop(recognizer, voice, tts_config, display: SpeechState, 
         if not WakeHandler.busy_lock.acquire(blocking=False):
             log("wake ignored because a session is already running")
             continue
-        run_session_thread(recognizer, voice, tts_config, display, beep_path, audio_source)
+        run_session_thread(recognizer, voice, display, beep_path, audio_source)
 
 
 def open_session_input(display: SpeechState, chunk: int) -> sd.InputStream:
@@ -563,13 +564,13 @@ def open_session_input(display: SpeechState, chunk: int) -> sd.InputStream:
     raise RuntimeError("speech input stream unavailable")
 
 
-def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
+def run_session(recognizer, voice, display: SpeechState, beep_path: Path, audio_source) -> None:
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     audio = open_session_input(display, chunk)
     voice_activity_probe = getattr(audio_source, "activity_state", None) or getattr(audio_source, "is_voice_active", None)
     try:
         display.set_state("listening", "wake")
-        speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)
+        speak_pausing_input(audio, WAKE_RESPONSE, voice, display)
         drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
 
         for turn in range(1, MAX_SESSION_TURNS + 1):
@@ -584,22 +585,22 @@ def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: 
             if not command:
                 log("conversation idle timeout")
                 if SESSION_IDLE_RESPONSE:
-                    speak_pausing_input(audio, SESSION_IDLE_RESPONSE, voice, tts_config, display)
+                    speak_pausing_input(audio, SESSION_IDLE_RESPONSE, voice, display)
                 display.set_state("idle")
                 return
             direction_payload = update_speech_state(direction=direction_status(audio_source))
             direction_reply = direction_answer_from_snapshot(command, dict(direction_payload.get("direction") or {}))
             if direction_reply is not None:
                 log(f"direction answer: {direction_reply}")
-                speak_pausing_input(audio, direction_reply, voice, tts_config, display)
+                speak_pausing_input(audio, direction_reply, voice, display)
                 drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
                 continue
-            if not handle_conversation_turn(audio, command, voice, tts_config, display):
+            if not handle_conversation_turn(audio, command, voice, display):
                 return
             drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
 
         log("conversation reached max turns")
-        speak_pausing_input(audio, SESSION_END_RESPONSE, voice, tts_config, display)
+        speak_pausing_input(audio, SESSION_END_RESPONSE, voice, display)
         display.set_state("idle")
     finally:
         audio.close()
@@ -610,7 +611,7 @@ def main() -> None:
     log("using remote ASR service")
     recognizer = create_remote_asr()
     log("using remote TTS service")
-    voice, tts_config = create_remote_tts()
+    voice = create_remote_tts()
     audio_source = open_respeaker()
     beep_path = Path("/tmp/chat2me_wake.wav")
     write_beep(beep_path)
@@ -620,7 +621,6 @@ def main() -> None:
 
     WakeHandler.recognizer = recognizer
     WakeHandler.voice = voice
-    WakeHandler.tts_config = tts_config
     WakeHandler.display = display
     WakeHandler.beep_path = beep_path
     WakeHandler.audio_source = audio_source
@@ -629,7 +629,7 @@ def main() -> None:
     server = ThreadingHTTPServer((SPEECH_HOST, SPEECH_PORT), WakeHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"speech service listening on {SPEECH_HOST}:{SPEECH_PORT}")
-    run_embedded_wake_loop(recognizer, voice, tts_config, display, beep_path, audio_source)
+    run_embedded_wake_loop(recognizer, voice, display, beep_path, audio_source)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any
 
-from app.common import env_bool, env_float, env_value, log
+from app.common import direction_label, direction_sector, env_bool, env_float, env_value, log
 
 try:
     import usb.core
@@ -54,17 +54,6 @@ PARAMETERS = {
     "DOAANGLE": (21, 0, "int", "ro"),
 }
 
-DIRECTION_SECTORS = (
-    ("front", "正前方"),
-    ("front_right", "右前方"),
-    ("right", "右侧"),
-    ("back_right", "右后方"),
-    ("back", "正后方"),
-    ("back_left", "左后方"),
-    ("left", "左侧"),
-    ("front_left", "左前方"),
-)
-
 DIRECTION_QUERY_RE = re.compile(
     r"(我在你(的)?(哪边|哪一边|哪儿|哪里|什么方向|哪个方向|左边|右边|前面|后面)|"
     r"你(能|可以)?(听出|判断|知道)?我在(哪边|哪一边|哪儿|哪里|什么方向|哪个方向))"
@@ -76,15 +65,6 @@ def env_int_base(key: str) -> int:
         return int(env_value(key), 0)
     except ValueError:
         raise RuntimeError(f"{key} must be an integer in runtime.env") from None
-
-
-def env_float_default(key: str, default: str) -> float:
-    raw_value = os.getenv(key, default)
-    value = raw_value.strip() or default
-    try:
-        return float(value)
-    except ValueError:
-        raise RuntimeError(f"{key} must be a number in runtime.env") from None
 
 
 def optional_env_bool(name: str) -> int | None:
@@ -102,15 +82,6 @@ def optional_env_float(name: str) -> float | None:
         return float(value.strip())
     except ValueError:
         raise RuntimeError(f"{name} must be a number in runtime.env") from None
-
-
-def direction_sector(angle: int) -> dict[str, str]:
-    code, label = DIRECTION_SECTORS[int(((angle + 22.5) % 360) // 45)]
-    return {"code": code, "label": label}
-
-
-def direction_label(angle: int | float) -> str:
-    return direction_sector(int(round(angle)) % 360)["label"]
 
 
 def is_direction_query(text: str) -> bool:
@@ -411,7 +382,7 @@ def open_respeaker() -> ReSpeakerAudioSourceManager | None:
     if usb is None:
         log("respeaker control unavailable: pyusb is not installed", level="warning")
         return None
-    return ReSpeakerAudioSourceManager(env_float_default("RESPEAKER_RECONNECT_SECONDS", "5"))
+    return ReSpeakerAudioSourceManager(env_float("RESPEAKER_RECONNECT_SECONDS", 5))
 
 
 def direction_answer(text: str, source: ReSpeakerAudioSource | ReSpeakerAudioSourceManager | None) -> str | None:

@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir \
       -r requirements.txt
 
 COPY config /defaults/config
+COPY runtime/entrypoints/lib.sh /entrypoint-lib.sh
 COPY runtime/entrypoints/config.sh /config.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY services/core/app ./app

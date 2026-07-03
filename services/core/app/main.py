@@ -12,65 +12,8 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from app.common import log
-
-
-def load_runtime_env() -> None:
-    path = Path(os.getenv("RUNTIME_CONFIG_PATH", "/app/config/runtime.env"))
-    if not path.is_file():
-        return
-    protected_keys = set(os.environ)
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not key or not re.fullmatch(r"[A-Za-z0-9_]+", key):
-            continue
-        values[key] = value.strip()
-    for key, value in values.items():
-        if key not in protected_keys:
-            os.environ[key] = value
-
-
-load_runtime_env()
-
-
-def env_value(key: str, *, allow_empty: bool = False, default: str | None = None) -> str:
-    value = os.getenv(key)
-    if value is None:
-        if default is not None:
-            value = default
-        else:
-            raise RuntimeError(f"{key} must be set in runtime.env")
-    value = value.strip()
-    if not allow_empty and not value:
-        raise RuntimeError(f"{key} must not be empty in runtime.env")
-    return value
-
-
-def env_float(key: str, default: str | None = None) -> float:
-    value = env_value(key, default=default)
-    try:
-        return float(value)
-    except ValueError:
-        raise RuntimeError(f"{key} must be a number in runtime.env") from None
-
-
-def env_bool(key: str, default: str | None = None) -> bool:
-    value = env_value(key, default=default).lower()
-    if value in {"1", "true", "yes", "on"}:
-        return True
-    if value in {"0", "false", "no", "off"}:
-        return False
-    raise RuntimeError(f"{key} must be a boolean in runtime.env")
-
-
-def env_csv(key: str) -> tuple[str, ...]:
-    return tuple(item.strip() for item in env_value(key).split(",") if item.strip())
-
+# app.common loads runtime.env at import time.
+from app.common import direction_label, env_bool, env_csv, env_float, env_value, log
 
 CORE_LLM_URL = "http://chat2me-llm:8082/chat"
 CORE_INTENT_URL = "http://chat2me-llm:8082/intent"
@@ -78,9 +21,9 @@ CORE_LLM_REACHABILITY_URL = "http://chat2me-llm:8082/llm/reachability"
 CORE_LLM_HEALTH_URL = "http://chat2me-llm:8082/health"
 CORE_LLM_TIMEOUT_SECONDS = 180.0
 CORE_LLM_REACHABILITY_TIMEOUT_SECONDS = 2.0
-CORE_INTENT_TIMEOUT_SECONDS = env_float("INTENT_TIMEOUT_SECONDS", "15")
-INTENT_CLASSIFIER_ENABLED = env_bool("INTENT_CLASSIFIER_ENABLED", "1")
-INTENT_CONFIDENCE_THRESHOLD = env_float("INTENT_CONFIDENCE_THRESHOLD", "0.70")
+CORE_INTENT_TIMEOUT_SECONDS = env_float("INTENT_TIMEOUT_SECONDS", 15)
+INTENT_CLASSIFIER_ENABLED = env_bool("INTENT_CLASSIFIER_ENABLED", True)
+INTENT_CONFIDENCE_THRESHOLD = env_float("INTENT_CONFIDENCE_THRESHOLD", 0.70)
 EMPTY_ANSWER_RESPONSE = env_value("EMPTY_ANSWER_RESPONSE")
 SESSION_END_RESPONSE = env_value("SESSION_END_RESPONSE")
 SESSION_END_PHRASES = env_csv("SESSION_END_PHRASES")
@@ -290,14 +233,12 @@ def is_invalid_input(message: str) -> bool:
 
 
 def match_fixed_qa(message: str) -> str | None:
+    # 只做「pattern 是输入的子串」的正向匹配。反向匹配（输入是 pattern 的子串）
+    # 会让"你是谁"误命中"你是谁开发的"这类更长的 pattern；短输入交给意图分类兜底。
     normalized = normalize_for_match(message)
     for _, item in fixed_qa_items():
-        patterns = item.get("patterns", [])
-        normalized_patterns = [normalize_for_match(str(pattern)) for pattern in patterns]
-        if any(
-            pattern and (pattern in normalized or (len(normalized) >= 2 and normalized in pattern))
-            for pattern in normalized_patterns
-        ):
+        patterns = (normalize_for_match(str(pattern)) for pattern in item.get("patterns", []))
+        if any(pattern and pattern in normalized for pattern in patterns):
             return str(item.get("answer", "")).strip() or None
     return None
 
@@ -421,23 +362,6 @@ async def call_intent_service(message: str) -> dict[str, Any] | None:
     if result is None:
         log(f"intent classifier returned invalid payload: {content[:200]}", level="warning")
     return result
-
-
-DIRECTION_SECTORS = (
-    ("front", "正前方"),
-    ("front_right", "右前方"),
-    ("right", "右侧"),
-    ("back_right", "右后方"),
-    ("back", "正后方"),
-    ("back_left", "左后方"),
-    ("left", "左侧"),
-    ("front_left", "左前方"),
-)
-
-
-def direction_label(angle: int | float) -> str:
-    _, label = DIRECTION_SECTORS[int(((float(angle) + 22.5) % 360) // 45)]
-    return label
 
 
 async def fetch_direction() -> DirectionResponse:

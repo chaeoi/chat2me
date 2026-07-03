@@ -17,7 +17,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app import voice
-from app.common import log
+from app.common import env_bool, env_float, log
 
 
 TTS_HOST = os.getenv("TTS_HOST", "0.0.0.0")
@@ -27,42 +27,19 @@ LOCAL_TTS_MODEL = "MeloTTS-Chinese"
 CONFIGURED_TTS_ENGINE = voice.VOICE_TTS_ENGINE
 CONFIGURED_TTS_MODEL = voice.VOICE_TTS_MODEL
 
-
-def env_float_default(key: str, default: float) -> float:
-    value = os.getenv(key)
-    if value is None or not value.strip():
-        return default
-    try:
-        return float(value.strip())
-    except ValueError:
-        raise RuntimeError(f"{key} must be a number in runtime.env") from None
-
-
-def env_bool_default(key: str, default: bool) -> bool:
-    value = os.getenv(key)
-    if value is None or not value.strip():
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise RuntimeError(f"{key} must be a boolean in runtime.env")
-
-
-TTS_REACHABILITY_INTERVAL_SECONDS = env_float_default("TTS_REACHABILITY_INTERVAL_SECONDS", 5.0)
-TTS_REACHABILITY_TIMEOUT_SECONDS = env_float_default("TTS_REACHABILITY_TIMEOUT_SECONDS", 3.0)
-TTS_ONLINE_SYNTHESIS_TIMEOUT_SECONDS = env_float_default("TTS_ONLINE_SYNTHESIS_TIMEOUT_SECONDS", 8.0)
-TTS_ONLINE_FAILURE_COOLDOWN_SECONDS = env_float_default("TTS_ONLINE_FAILURE_COOLDOWN_SECONDS", 30.0)
-TTS_ONLINE_RECENT_SUCCESS_GRACE_SECONDS = env_float_default("TTS_ONLINE_RECENT_SUCCESS_GRACE_SECONDS", 30.0)
-TTS_LOCAL_SYNTHESIS_TIMEOUT_SECONDS = env_float_default("TTS_LOCAL_SYNTHESIS_TIMEOUT_SECONDS", 20.0)
-TTS_LOCAL_LOCK_TIMEOUT_SECONDS = env_float_default("TTS_LOCAL_LOCK_TIMEOUT_SECONDS", 5.0)
-TTS_NORMALIZE_ENABLED = env_bool_default("TTS_NORMALIZE_ENABLED", True)
-TTS_TARGET_RMS_DBFS = env_float_default("TTS_TARGET_RMS_DBFS", -22.0)
-TTS_PEAK_LIMIT_DBFS = env_float_default("TTS_PEAK_LIMIT_DBFS", -2.0)
-TTS_NORMALIZE_ACTIVE_FLOOR_DBFS = env_float_default("TTS_NORMALIZE_ACTIVE_FLOOR_DBFS", -45.0)
-TTS_NORMALIZE_MIN_GAIN = env_float_default("TTS_NORMALIZE_MIN_GAIN", 0.25)
-TTS_NORMALIZE_MAX_GAIN = env_float_default("TTS_NORMALIZE_MAX_GAIN", 6.0)
+TTS_REACHABILITY_INTERVAL_SECONDS = env_float("TTS_REACHABILITY_INTERVAL_SECONDS", 5.0)
+TTS_REACHABILITY_TIMEOUT_SECONDS = env_float("TTS_REACHABILITY_TIMEOUT_SECONDS", 3.0)
+TTS_ONLINE_SYNTHESIS_TIMEOUT_SECONDS = env_float("TTS_ONLINE_SYNTHESIS_TIMEOUT_SECONDS", 8.0)
+TTS_ONLINE_FAILURE_COOLDOWN_SECONDS = env_float("TTS_ONLINE_FAILURE_COOLDOWN_SECONDS", 30.0)
+TTS_ONLINE_RECENT_SUCCESS_GRACE_SECONDS = env_float("TTS_ONLINE_RECENT_SUCCESS_GRACE_SECONDS", 30.0)
+TTS_LOCAL_SYNTHESIS_TIMEOUT_SECONDS = env_float("TTS_LOCAL_SYNTHESIS_TIMEOUT_SECONDS", 20.0)
+TTS_LOCAL_LOCK_TIMEOUT_SECONDS = env_float("TTS_LOCAL_LOCK_TIMEOUT_SECONDS", 5.0)
+TTS_NORMALIZE_ENABLED = env_bool("TTS_NORMALIZE_ENABLED", True)
+TTS_TARGET_RMS_DBFS = env_float("TTS_TARGET_RMS_DBFS", -22.0)
+TTS_PEAK_LIMIT_DBFS = env_float("TTS_PEAK_LIMIT_DBFS", -2.0)
+TTS_NORMALIZE_ACTIVE_FLOOR_DBFS = env_float("TTS_NORMALIZE_ACTIVE_FLOOR_DBFS", -45.0)
+TTS_NORMALIZE_MIN_GAIN = env_float("TTS_NORMALIZE_MIN_GAIN", 0.25)
+TTS_NORMALIZE_MAX_GAIN = env_float("TTS_NORMALIZE_MAX_GAIN", 6.0)
 if TTS_NORMALIZE_MIN_GAIN <= 0 or TTS_NORMALIZE_MAX_GAIN <= 0:
     raise RuntimeError("TTS_NORMALIZE_MIN_GAIN and TTS_NORMALIZE_MAX_GAIN must be greater than zero")
 if TTS_NORMALIZE_MIN_GAIN > TTS_NORMALIZE_MAX_GAIN:
@@ -198,7 +175,7 @@ def create_local_voice() -> voice.TextToSpeech:
     engine = local_engine()
     model = local_model()
     with_tts_env(engine, model)
-    tts_voice, _ = voice.create_tts()
+    tts_voice = voice.create_tts()
     voice.preload_tts_cache(tts_voice, voice.WAKE_RESPONSE, voice.SESSION_END_RESPONSE, voice.SESSION_IDLE_RESPONSE)
     voice.warmup_tts(tts_voice)
     log(f"local TTS ready: engine={engine} model={model} sample_rate={tts_voice.config.sample_rate}")
@@ -209,7 +186,7 @@ def create_online_voice() -> voice.TextToSpeech:
     if not online_enabled():
         raise RuntimeError("online TTS is not configured")
     with_tts_env("online", CONFIGURED_TTS_MODEL)
-    tts_voice, _ = voice.create_tts()
+    tts_voice = voice.create_tts()
     log(f"online TTS ready: model={CONFIGURED_TTS_MODEL} sample_rate={tts_voice.config.sample_rate}")
     return tts_voice
 

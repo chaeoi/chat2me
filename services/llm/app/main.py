@@ -7,37 +7,14 @@ import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from app.common import log
-
-
-def load_runtime_env() -> None:
-    path = Path(os.getenv("RUNTIME_CONFIG_PATH", "/app/config/runtime.env"))
-    if not path.is_file():
-        return
-    protected_keys = set(os.environ)
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not key or not re.fullmatch(r"[A-Za-z0-9_]+", key):
-            continue
-        values[key] = value.strip()
-    for key, value in values.items():
-        if key not in protected_keys:
-            os.environ[key] = value
-
-
-load_runtime_env()
+# app.common loads runtime.env at import time.
+from app.common import env_float, env_int, env_value, log
 
 LOCAL_LLM_PROVIDERS = {"ollama", "local"}
 ONLINE_LLM_PROVIDERS = {"online"}
@@ -46,35 +23,6 @@ SUPPORTED_ONLINE_LLM_PROVIDERS = {ONLINE_LLM_PROVIDER_OPENAI}
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 RESPONSES_PATH = "/responses"
 MODELS_PATH = "/models"
-
-
-def env_value(key: str, *, allow_empty: bool = False, default: str | None = None) -> str:
-    value = os.getenv(key)
-    if value is None:
-        if default is not None:
-            value = default
-        else:
-            raise RuntimeError(f"{key} must be set in runtime.env")
-    value = value.strip()
-    if not allow_empty and not value:
-        raise RuntimeError(f"{key} must not be empty in runtime.env")
-    return value
-
-
-def env_float(key: str, default: str | None = None) -> float:
-    value = env_value(key, default=default)
-    try:
-        return float(value)
-    except ValueError:
-        raise RuntimeError(f"{key} must be a number in runtime.env") from None
-
-
-def env_int(key: str, default: str | None = None) -> int:
-    value = env_value(key, default=default)
-    try:
-        return int(value)
-    except ValueError:
-        raise RuntimeError(f"{key} must be an integer in runtime.env") from None
 
 
 def normalize_provider(value: str) -> str:
@@ -106,10 +54,10 @@ OLLAMA_NUM_CTX = env_int("OLLAMA_NUM_CTX")
 OLLAMA_NUM_THREAD = env_int("OLLAMA_NUM_THREAD")
 OLLAMA_KEEP_ALIVE = env_value("OLLAMA_KEEP_ALIVE", allow_empty=True, default="30m")
 INTENT_MODEL = env_value("INTENT_MODEL", allow_empty=True, default="")
-INTENT_MAX_TOKENS = env_int("INTENT_MAX_TOKENS", default="48")
-INTENT_NUM_CTX = env_int("INTENT_NUM_CTX", default="2048")
-INTENT_TEMPERATURE = env_float("INTENT_TEMPERATURE", default="0")
-INTENT_TIMEOUT_SECONDS = env_float("INTENT_TIMEOUT_SECONDS", default="15")
+INTENT_MAX_TOKENS = env_int("INTENT_MAX_TOKENS", default=48)
+INTENT_NUM_CTX = env_int("INTENT_NUM_CTX", default=2048)
+INTENT_TEMPERATURE = env_float("INTENT_TEMPERATURE", default=0)
+INTENT_TIMEOUT_SECONDS = env_float("INTENT_TIMEOUT_SECONDS", default=15)
 EMPTY_ANSWER_RESPONSE = env_value("EMPTY_ANSWER_RESPONSE")
 SYSTEM_PROMPT = os.getenv("LLM_SYSTEM_PROMPT", "").strip()
 

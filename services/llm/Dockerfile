@@ -20,6 +20,7 @@ COPY services/llm/requirements.txt .
 RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt
 
 COPY config /defaults/config
+COPY runtime/entrypoints/lib.sh /entrypoint-lib.sh
 COPY services/llm/entrypoint.sh /entrypoint.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY services/llm/app ./app

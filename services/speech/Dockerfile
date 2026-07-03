@@ -44,6 +44,7 @@ RUN chmod +x /opt/preload.sh \
     && rm -f /opt/preload.sh
 
 COPY config /defaults/config
+COPY runtime/entrypoints/lib.sh /entrypoint-lib.sh
 COPY runtime/entrypoints/audio.sh /audio.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY runtime/shared/voice.py ./app/voice.py

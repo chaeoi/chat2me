@@ -42,39 +42,70 @@ def quiet_http_client_logging() -> None:
 quiet_http_client_logging()
 
 
-def env_value(key: str, *, allow_empty: bool = False) -> str:
+def env_value(key: str, *, allow_empty: bool = False, default: str | None = None) -> str:
+    # 未设置 -> default（无 default 则报错）；显式空值在 allow_empty 时原样返回，
+    # 否则同样回退到 default（无 default 则报错）。
     value = os.getenv(key)
     if value is None:
+        if default is not None:
+            return default
         raise RuntimeError(f"{key} must be set in runtime.env")
     value = value.strip()
-    if not allow_empty and not value:
+    if not value and not allow_empty:
+        if default is not None:
+            return default
         raise RuntimeError(f"{key} must not be empty in runtime.env")
     return value
 
 
-def env_int(key: str) -> int:
-    value = env_value(key)
+def env_int(key: str, default: int | None = None) -> int:
+    value = env_value(key, default=None if default is None else str(default))
     try:
         return int(value)
     except ValueError:
         raise RuntimeError(f"{key} must be an integer in runtime.env") from None
 
 
-def env_float(key: str) -> float:
-    value = env_value(key)
+def env_float(key: str, default: float | None = None) -> float:
+    value = env_value(key, default=None if default is None else str(default))
     try:
         return float(value)
     except ValueError:
         raise RuntimeError(f"{key} must be a number in runtime.env") from None
 
 
-def env_bool(key: str) -> bool:
-    value = env_value(key).lower()
+def env_bool(key: str, default: bool | None = None) -> bool:
+    value = env_value(key, default=None if default is None else ("1" if default else "0")).lower()
     if value in {"1", "true", "yes", "on"}:
         return True
     if value in {"0", "false", "no", "off"}:
         return False
     raise RuntimeError(f"{key} must be a boolean in runtime.env")
+
+
+def env_csv(key: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in env_value(key).split(",") if item.strip())
+
+
+DIRECTION_SECTORS = (
+    ("front", "正前方"),
+    ("front_right", "右前方"),
+    ("right", "右侧"),
+    ("back_right", "右后方"),
+    ("back", "正后方"),
+    ("back_left", "左后方"),
+    ("left", "左侧"),
+    ("front_left", "左前方"),
+)
+
+
+def direction_sector(angle: int | float) -> dict[str, str]:
+    code, label = DIRECTION_SECTORS[int(((float(angle) + 22.5) % 360) // 45)]
+    return {"code": code, "label": label}
+
+
+def direction_label(angle: int | float) -> str:
+    return direction_sector(angle)["label"]
 
 
 LOG_LEVELS = {

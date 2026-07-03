@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import time
 import wave
 from collections import deque
@@ -15,38 +16,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Protocol, TypedDict
 
-from app.common import DisplayClient, env_bool, env_float, env_int, env_value, log
+from app.common import DisplayClient, env_bool, env_csv, env_float, env_int, env_value, log
 import numpy as np
-
-
-def env_float_compat(primary_key: str, fallback_key: str, default: str) -> float:
-    value = os.getenv(primary_key) or os.getenv(fallback_key) or default
-    try:
-        return float(value.strip())
-    except ValueError:
-        raise RuntimeError(f"{primary_key} must be a number in runtime.env") from None
-
-
-def env_bool_default(key: str, default: bool) -> bool:
-    value = os.getenv(key)
-    if value is None or not value.strip():
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise RuntimeError(f"{key} must be a boolean in runtime.env")
-
-
-def env_float_default(key: str, default: float) -> float:
-    value = os.getenv(key)
-    if value is None or not value.strip():
-        return default
-    try:
-        return float(value.strip())
-    except ValueError:
-        raise RuntimeError(f"{key} must be a number in runtime.env") from None
 
 
 def is_default_audio_selector(value: str) -> bool:
@@ -63,12 +34,7 @@ KWS_MODEL_DIR = MODELS_DIR / VOICE_KWS_MODEL
 ASR_MODEL_DIR = MODELS_DIR / VOICE_ASR_ENGINE / VOICE_ASR_MODEL
 GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_words.txt"
 GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_words_raw.txt"
-WAKE_WORDS_ENV = env_value("WAKE_WORDS")
-WAKE_WORDS = tuple(
-    word.strip()
-    for word in WAKE_WORDS_ENV.split(",")
-    if word.strip()
-)
+WAKE_WORDS = env_csv("WAKE_WORDS")
 if not WAKE_WORDS:
     raise RuntimeError("WAKE_WORDS must contain at least one wake word in runtime.env")
 
@@ -96,11 +62,12 @@ ASR_THREADS = env_int("ASR_THREADS")
 SENSEVOICE_LANGUAGE = os.getenv("SENSEVOICE_LANGUAGE", "auto").strip().lower() or "auto"
 if SENSEVOICE_LANGUAGE not in {"auto", "zh", "en", "ja", "ko", "yue"}:
     raise RuntimeError("SENSEVOICE_LANGUAGE must be auto, zh, en, ja, ko, or yue in runtime.env")
-SENSEVOICE_USE_ITN = env_bool_default("SENSEVOICE_USE_ITN", True)
-ASR_HOMOPHONE_REPLACER_ENABLED = env_bool_default("ASR_HOMOPHONE_REPLACER_ENABLED", False)
+SENSEVOICE_USE_ITN = env_bool("SENSEVOICE_USE_ITN", True)
+ASR_HOMOPHONE_REPLACER_ENABLED = env_bool("ASR_HOMOPHONE_REPLACER_ENABLED", False)
 ASR_HOMOPHONE_LEXICON_RAW = os.getenv("ASR_HOMOPHONE_LEXICON", str(MODELS_DIR / "homophone" / "lexicon.txt")).strip()
 ASR_HOMOPHONE_RULE_FSTS = os.getenv("ASR_HOMOPHONE_RULE_FSTS", str(MODELS_DIR / "homophone" / "replace.fst")).strip()
-CORE_REQUEST_TIMEOUT_SECONDS = env_float_compat("CORE_REQUEST_TIMEOUT_SECONDS", "GATEWAY_REQUEST_TIMEOUT_SECONDS", "30")
+# Legacy deployments may still set GATEWAY_* keys in runtime.env.
+CORE_REQUEST_TIMEOUT_SECONDS = env_float("CORE_REQUEST_TIMEOUT_SECONDS", env_float("GATEWAY_REQUEST_TIMEOUT_SECONDS", 30))
 CORE_UNAVAILABLE_RESPONSE = os.getenv("CORE_UNAVAILABLE_RESPONSE") or env_value("GATEWAY_UNAVAILABLE_RESPONSE")
 COMMAND_TIMEOUT_SECONDS = env_float("COMMAND_TIMEOUT_SECONDS")
 COMMAND_MIN_SECONDS = env_float("COMMAND_MIN_SECONDS")
@@ -129,16 +96,16 @@ SPEECH_TTS_MAX_CHARS = env_int("SPEECH_TTS_MAX_CHARS")
 TTS_CACHE_ENABLED = env_bool("TTS_CACHE_ENABLED")
 TTS_CACHE_MAX_ITEMS = env_int("TTS_CACHE_MAX_ITEMS")
 TTS_CACHE_MAX_BYTES = env_int("TTS_CACHE_MAX_BYTES")
-TTS_PLAYBACK_MODE = os.getenv("TTS_PLAYBACK_MODE", "buffered").strip().lower()
-TTS_PREBUFFER_SECONDS = float(os.getenv("TTS_PREBUFFER_SECONDS", "2.4").strip() or "2.4")
-TTS_PLAYBACK_RETRY_SECONDS = float(os.getenv("TTS_PLAYBACK_RETRY_SECONDS", "3").strip() or "3")
+TTS_PLAYBACK_MODE = env_value("TTS_PLAYBACK_MODE", default="buffered").lower()
+TTS_PREBUFFER_SECONDS = env_float("TTS_PREBUFFER_SECONDS", 2.4)
+TTS_PLAYBACK_RETRY_SECONDS = env_float("TTS_PLAYBACK_RETRY_SECONDS", 3)
 TTS_WARMUP_TEXTS = tuple(
     text.strip()
     for text in os.getenv("TTS_WARMUP_TEXTS", "").split("|")
     if text.strip()
 )
-TTS_SERVICE_CONNECT_TIMEOUT_SECONDS = env_float_default("TTS_SERVICE_CONNECT_TIMEOUT_SECONDS", 3.0)
-TTS_SERVICE_READ_TIMEOUT_SECONDS = env_float_default("TTS_SERVICE_READ_TIMEOUT_SECONDS", 35.0)
+TTS_SERVICE_CONNECT_TIMEOUT_SECONDS = env_float("TTS_SERVICE_CONNECT_TIMEOUT_SECONDS", 3.0)
+TTS_SERVICE_READ_TIMEOUT_SECONDS = env_float("TTS_SERVICE_READ_TIMEOUT_SECONDS", 35.0)
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
 VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "auto").strip().lower()
 MELOTTS_CONFIG_FILE = Path(os.getenv("MELOTTS_CONFIG_FILE", str(TTS_MODEL_DIR / "config.json")))
@@ -156,13 +123,8 @@ DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 WAKE_RESPONSE = env_value("WAKE_RESPONSE")
 SESSION_IDLE_RESPONSE = env_value("SESSION_IDLE_RESPONSE", allow_empty=True)
 SESSION_END_RESPONSE = env_value("SESSION_END_RESPONSE")
-SESSION_END_PHRASES_ENV = env_value("SESSION_END_PHRASES")
 MAX_SESSION_TURNS = env_int("MAX_SESSION_TURNS")
-SESSION_END_PHRASES = tuple(
-    phrase.strip()
-    for phrase in SESSION_END_PHRASES_ENV.split(",")
-    if phrase.strip()
-)
+SESSION_END_PHRASES = env_csv("SESSION_END_PHRASES")
 if not SESSION_END_PHRASES:
     raise RuntimeError("SESSION_END_PHRASES must contain at least one phrase in runtime.env")
 KWS_KEYWORDS_SCORE = env_float("KWS_KEYWORDS_SCORE")
@@ -391,6 +353,23 @@ class RemoteBatchRecognizer:
         return bool(stream.get("endpoint", False))
 
 
+# 语音链路对 ASR/TTS/Core 的调用是串行低频的，共用一个连接池避免每轮握手。
+# httpx 延迟导入：并非所有引用本模块的镜像都装了 httpx。
+_SERVICE_CLIENT: Any | None = None
+_SERVICE_CLIENT_LOCK = threading.Lock()
+
+
+def service_http_client() -> Any:
+    global _SERVICE_CLIENT
+    if _SERVICE_CLIENT is None:
+        import httpx
+
+        with _SERVICE_CLIENT_LOCK:
+            if _SERVICE_CLIENT is None:
+                _SERVICE_CLIENT = httpx.Client()
+    return _SERVICE_CLIENT
+
+
 def float_audio_to_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
     clipped = np.clip(np.asarray(samples, dtype=np.float32).reshape(-1), -1.0, 1.0)
     pcm = (clipped * 32767.0).astype(np.int16).tobytes()
@@ -409,9 +388,8 @@ def transcribe_remote_audio(samples: np.ndarray, sample_rate: int) -> str:
     wav_bytes = float_audio_to_wav_bytes(samples, sample_rate)
     files = {"file": ("speech.wav", wav_bytes, "audio/wav")}
     timeout = httpx.Timeout(connect=5.0, read=COMMAND_TIMEOUT_SECONDS + 10, write=15.0, pool=5.0)
-    with httpx.Client(timeout=timeout) as client:
-        response = client.post(ASR_SERVICE_URL, files=files)
-        response.raise_for_status()
+    response = service_http_client().post(ASR_SERVICE_URL, files=files, timeout=timeout)
+    response.raise_for_status()
     payload: dict[str, Any] = response.json()
     route = payload.get("route")
     engine = payload.get("engine")
@@ -681,17 +659,17 @@ def create_melotts_tts() -> TextToSpeech:
     return MeloTextToSpeech(model, speaker_id, sample_rate)
 
 
-def create_tts() -> tuple[TextToSpeech, None]:
+def create_tts() -> TextToSpeech:
     if VOICE_TTS_ENGINE == "melotts":
-        return wrap_tts(create_melotts_tts()), None
+        return wrap_tts(create_melotts_tts())
     if VOICE_TTS_ENGINE == "online":
-        return wrap_tts(create_edge_tts()), None
+        return wrap_tts(create_edge_tts())
     raise RuntimeError(f"VOICE_TTS_ENGINE '{VOICE_TTS_ENGINE}' is not supported")
 
 
-def create_remote_tts() -> tuple[TextToSpeech, None]:
+def create_remote_tts() -> TextToSpeech:
     log(f"remote TTS service: {TTS_SERVICE_URL}")
-    return RemoteTextToSpeech(), None
+    return RemoteTextToSpeech()
 
 
 def wrap_tts(voice: TextToSpeech) -> TextToSpeech:
@@ -747,16 +725,14 @@ def synthesize_edge_tts_audio(text: str) -> bytes:
 def synthesize_remote_wav(text: str) -> bytes:
     import httpx
 
-    payload = {"text": text}
     timeout = httpx.Timeout(
         connect=max(0.1, TTS_SERVICE_CONNECT_TIMEOUT_SECONDS),
         read=max(1.0, TTS_SERVICE_READ_TIMEOUT_SECONDS),
         write=15.0,
         pool=5.0,
     )
-    with httpx.Client(timeout=timeout) as client:
-        response = client.post(TTS_SERVICE_URL, json=payload)
-        response.raise_for_status()
+    response = service_http_client().post(TTS_SERVICE_URL, json={"text": text}, timeout=timeout)
+    response.raise_for_status()
     route = response.headers.get("X-Chat2Me-TTS-Route", "")
     engine = response.headers.get("X-Chat2Me-TTS-Engine", "")
     model = response.headers.get("X-Chat2Me-TTS-Model", "")
@@ -864,7 +840,7 @@ def play_pcm_chunks(command: list[str], chunks: Iterable[bytes]) -> None:
         raise RuntimeError(f"aplay exited with status {return_code}")
 
 
-def speak(text: str, voice: TextToSpeech, config: Any = None) -> None:
+def speak(text: str, voice: TextToSpeech) -> None:
     if not text:
         return
     log(f"{VOICE_TTS_ENGINE} tts: text={text}")
@@ -947,7 +923,6 @@ def speak_pausing_input(
     audio: Any,
     text: str,
     voice: TextToSpeech,
-    config: Any,
     display: DisplayClient,
 ) -> None:
     if not text:
@@ -955,7 +930,7 @@ def speak_pausing_input(
     display.set_state("speaking", text)
     audio.stop()
     try:
-        speak(text, voice, config)
+        speak(text, voice)
     finally:
         audio.start()
         display.set_state("listening")
@@ -987,10 +962,6 @@ def audio_rms(samples: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(samples)))) if samples.size else 0.0
 
 
-def decode_ready_asr(recognizer: StreamingRecognizer, stream: Any) -> str:
-    return recognizer.decode_ready(stream)
-
-
 def feed_asr(
     recognizer: StreamingRecognizer,
     stream: Any,
@@ -998,7 +969,7 @@ def feed_asr(
     last_text: str,
 ) -> str:
     recognizer.accept_waveform(stream, SAMPLE_RATE, samples)
-    result = decode_ready_asr(recognizer, stream)
+    result = recognizer.decode_ready(stream)
     if result and result != last_text:
         log(f"asr partial: {result}", level="debug")
         return result
@@ -1137,7 +1108,7 @@ def listen_command(
             break
 
     recognizer.input_finished(stream)
-    final_text = (decode_ready_asr(recognizer, stream) or last_text).strip()
+    final_text = (recognizer.decode_ready(stream) or last_text).strip()
     if final_text and voice_activity_probe is not None and speech_detected_chunks == 0:
         log(
             "asr rejected without speech detection: "
@@ -1158,31 +1129,33 @@ def listen_command(
 
 
 def ask_core(text: str) -> dict[str, Any]:
-    import httpx
-
-    payload: dict[str, Any] = {"message": text}
-    with httpx.Client(timeout=CORE_REQUEST_TIMEOUT_SECONDS) as client:
-        response = client.post(CORE_URL, json=payload)
-        response.raise_for_status()
-        data: dict[str, Any] = response.json()
+    response = service_http_client().post(
+        CORE_URL, json={"message": text}, timeout=CORE_REQUEST_TIMEOUT_SECONDS
+    )
+    response.raise_for_status()
+    data: dict[str, Any] = response.json()
     return data
 
 
 def is_session_end(command: str) -> bool:
+    # 退出词必须占据输入的主体：整句以外最多允许 2 个字的语气/称呼修饰
+    # （"退下吧"、"那再见"），避免"怎么跟朋友说再见"这类长句被误判为退出。
     normalized = re.sub(r"[\s，。！？,.!?]", "", command)
-    return any(phrase in normalized for phrase in SESSION_END_PHRASES)
+    return any(
+        phrase in normalized and len(normalized) <= len(phrase) + 2
+        for phrase in SESSION_END_PHRASES
+    )
 
 
 def handle_conversation_turn(
     audio: Any,
     command: str,
     voice: TextToSpeech,
-    tts_config: Any,
     display: DisplayClient,
 ) -> bool:
     if is_session_end(command):
         log(f"session end command: {command}")
-        speak_pausing_input(audio, SESSION_END_RESPONSE, voice, tts_config, display)
+        speak_pausing_input(audio, SESSION_END_RESPONSE, voice, display)
         display.set_state("idle")
         return False
 
@@ -1193,7 +1166,7 @@ def handle_conversation_turn(
     except Exception as exc:
         log(f"core request failed: {exc}", level="warning")
         display.set_state("error", "core unavailable")
-        speak_pausing_input(audio, CORE_UNAVAILABLE_RESPONSE, voice, tts_config, display)
+        speak_pausing_input(audio, CORE_UNAVAILABLE_RESPONSE, voice, display)
         return True
 
     answer = str(core_result.get("answer", "")).strip()
@@ -1207,7 +1180,7 @@ def handle_conversation_turn(
     speech_answer = spoken_text(answer)
     if speech_answer != answer:
         log(f"answer shortened for speech: {speech_answer}")
-    speak_pausing_input(audio, speech_answer, voice, tts_config, display)
+    speak_pausing_input(audio, speech_answer, voice, display)
     if route == "session_end":
         log("session ended by core intent route")
         display.set_state("idle")

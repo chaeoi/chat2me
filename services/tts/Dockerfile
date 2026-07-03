@@ -84,6 +84,7 @@ RUN chmod +x /opt/melotts.sh \
     && rm -f /opt/melotts.sh
 
 COPY config /defaults/config
+COPY runtime/entrypoints/lib.sh /entrypoint-lib.sh
 COPY runtime/entrypoints/audio.sh /audio.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY runtime/shared/voice.py ./app/voice.py

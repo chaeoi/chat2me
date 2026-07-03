@@ -364,6 +364,8 @@ static void startup_refresh_task(void *arg)
     vTaskDelete(NULL);
 }
 
+// 极简 JSON 提取：仅支持 "key":"value" 形式的字符串字段，value 内不能含转义引号。
+// 数字/布尔字段（如 ts）无法读取；需要更多字段时请改用真正的 JSON 解析。
 static bool extract_json_value(const char *line, const char *key, char *out, size_t out_size)
 {
     char needle[32];
@@ -404,6 +406,8 @@ static void handle_line(const char *line)
 
 static void uart_task(void *arg)
 {
+    // 协议为每行一条 JSON。超过 DISPLAY_LINE_SIZE 的行会被 fgets 拆成两段而解析失败；
+    // 发送端 text 受 DISPLAY_TEXT_MAX_CHARS 限制，正常不会超长。
     while (true) {
         char line[DISPLAY_LINE_SIZE] = {};
         if (fgets(line, sizeof(line), stdin) != NULL) {
