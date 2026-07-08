@@ -15,7 +15,6 @@ concurrency:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAMESPACE: bblb0u
 
 jobs:
   validate-secrets:
@@ -74,11 +73,16 @@ jobs:
       - name: Set image tags
         id: image-tags
         env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
           IMAGE_NAME: ${{ matrix.image }}
         run: |
           commit_date="$(git show -s --format=%cI "$GITHUB_SHA")"
           date_tag="$(date -u -d "$commit_date" +%Y%m%d)"
-          image="${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}"
+          namespace="${DOCKERHUB_NAMESPACE:-$DOCKERHUB_USERNAME}"
+          namespace="$(printf '%s' "$namespace" | tr '[:upper:]' '[:lower:]')"
+          test -n "$namespace" || { echo "::error::Missing Docker Hub namespace"; exit 1; }
+          image="${REGISTRY}/${namespace}/${IMAGE_NAME}"
           {
             echo "tags<<EOF"
             echo "${image}:latest"
