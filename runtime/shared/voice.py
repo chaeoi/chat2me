@@ -924,10 +924,11 @@ def speak_pausing_input(
     text: str,
     voice: TextToSpeech,
     display: DisplayClient,
+    expression: str | None = None,
 ) -> None:
     if not text:
         return
-    display.set_state("speaking", text)
+    display.set_state("speaking", text, expression=expression)
     audio.stop()
     try:
         speak(text, voice)
@@ -1171,6 +1172,7 @@ def handle_conversation_turn(
 
     answer = str(core_result.get("answer", "")).strip()
     route = str(core_result.get("route", "")).strip()
+    expression = str(core_result.get("expression") or "").strip() or None
     if route == "invalid_input":
         log(f"invalid input discarded: {command}")
         display.set_state("idle")
@@ -1180,7 +1182,7 @@ def handle_conversation_turn(
     speech_answer = spoken_text(answer)
     if speech_answer != answer:
         log(f"answer shortened for speech: {speech_answer}")
-    speak_pausing_input(audio, speech_answer, voice, display)
+    speak_pausing_input(audio, speech_answer, voice, display, expression=expression)
     if route == "session_end":
         log("session ended by core intent route")
         display.set_state("idle")

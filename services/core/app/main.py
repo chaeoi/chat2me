@@ -4,16 +4,17 @@ import json
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 import httpx
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 # app.common loads runtime.env at import time.
-from app.common import direction_label, env_bool, env_csv, env_float, env_value, log
+from app.common import direction_label, env_bool, env_csv, env_float, env_int, env_value, log
 
 CORE_LLM_URL = "http://chat2me-llm:8082/chat"
 CORE_INTENT_URL = "http://chat2me-llm:8082/intent"
@@ -32,6 +33,12 @@ WAKE_WORDS = env_csv("WAKE_WORDS")
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))
 SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))
 
+MOTION_ENABLED = env_bool("MOTION_ENABLED", False)
+MOTION_SOCKET = env_value("MOTION_SOCKET", allow_empty=True, default="/run/chat2me/motion.sock")
+MOTION_CONNECT_TIMEOUT_SECONDS = env_float("MOTION_CONNECT_TIMEOUT_SECONDS", 0.3)
+MOTION_READ_TIMEOUT_SECONDS = env_float("MOTION_READ_TIMEOUT_SECONDS", 1.0)
+MOTION_ACTION_TIMEOUT_MS = env_int("MOTION_ACTION_TIMEOUT_MS", 5000)
+
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
@@ -44,6 +51,9 @@ class ChatResponse(BaseModel):
     latency_ms: int
     fallback: bool = False
     online_status: str | None = None
+    action: str | None = None
+    action_ok: bool | None = None
+    expression: str | None = None
 
 
 class HealthResponse(BaseModel):
@@ -81,6 +91,8 @@ async def startup() -> None:
 
 
 MATCH_REMOVE_PATTERN = re.compile(r"[\s，。！？、,.!?;；:：\"'“”‘’（）()【】\[\]{}<>《》]")
+# 动作整句匹配时允许的句尾语气字："点点头吧""看我呀"仍算指令。
+ACTION_TRAILING_TOKENS = "吧呀啊呢嘛哦哈啦"
 
 
 def build_match_prefix_pattern() -> re.Pattern[str]:
@@ -178,14 +190,21 @@ def fixed_qa_items() -> list[tuple[str, dict[str, Any]]]:
     return items
 
 
-def fixed_qa_answer_by_id(item_id: str) -> str | None:
+def fixed_qa_item_by_id(item_id: str) -> dict[str, Any] | None:
     wanted = item_id.strip()
     if not wanted:
         return None
     for candidate_id, item in fixed_qa_items():
         if candidate_id == wanted:
-            return str(item.get("answer", "")).strip() or None
+            return item
     return None
+
+
+def fixed_qa_answer_by_id(item_id: str) -> str | None:
+    item = fixed_qa_item_by_id(item_id)
+    if not item:
+        return None
+    return str(item.get("answer", "")).strip() or None
 
 
 def normalize_for_match(text: str) -> str:
@@ -232,15 +251,123 @@ def is_invalid_input(message: str) -> bool:
     return bool(len(normalized) <= 8 and re.fullmatch(r"(en|em|um|uh|ah|a)+", normalized))
 
 
-def match_fixed_qa(message: str) -> str | None:
-    # 只做「pattern 是输入的子串」的正向匹配。反向匹配（输入是 pattern 的子串）
-    # 会让"你是谁"误命中"你是谁开发的"这类更长的 pattern；短输入交给意图分类兜底。
+async def call_motion(action_name: str, item: dict[str, Any]) -> bool:
+    if not MOTION_SOCKET:
+        log("motion socket is not configured; skipping action", level="warning")
+        return False
+
+    params: dict[str, Any] = {}
+    if bool(item.get("needs_direction")):
+        # speech 把声源方向归一化为 0=正前、顺时针递增，这里原样交给 motion 换算颈部 yaw。
+        direction = await fetch_direction()
+        angle = direction.angle_degrees if direction.ok and direction.angle_degrees is not None else None
+        params["direction_deg"] = angle if angle is not None else 0
+        params["fallback"] = "speaker" if angle is not None else "front"
+
+    payload = {
+        "id": f"act-{uuid.uuid4().hex[:16]}",
+        "name": action_name,
+        "params": params,
+        "preempt": True,
+        "timeout_ms": MOTION_ACTION_TIMEOUT_MS,
+    }
+    timeout = httpx.Timeout(
+        connect=MOTION_CONNECT_TIMEOUT_SECONDS,
+        read=MOTION_READ_TIMEOUT_SECONDS,
+        write=0.5,
+        pool=0.5,
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.AsyncHTTPTransport(uds=MOTION_SOCKET),
+            base_url="http://motion",
+            timeout=timeout,
+        ) as client:
+            response = await client.post("/action", json=payload)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        log(
+            f"motion rejected action {action_name}: "
+            f"http_{exc.response.status_code} {exc.response.text[:200]}",
+            level="warning",
+        )
+        return False
+    except httpx.HTTPError as exc:
+        log(f"motion unavailable for action {action_name}: {exc}", level="warning")
+        return False
+    except OSError as exc:
+        log(f"motion socket unavailable for action {action_name}: {exc}", level="warning")
+        return False
+    return True
+
+
+async def run_motion_action(item_id: str, action_name: str, item: dict[str, Any]) -> None:
+    action_ok = await call_motion(action_name, item)
+    log(f"fixed item action triggered: id={item_id} action={action_name} ok={action_ok}")
+
+
+async def execute_fixed_item(
+    item_id: str,
+    item: dict[str, Any],
+    started_at: float,
+    route: str,
+    background_tasks: BackgroundTasks,
+) -> ChatResponse:
+    action_name = str(item.get("action") or "").strip() or None
+    expression = str(item.get("expression") or "").strip() or None
+    action_ok: bool | None = None
+
+    if action_name:
+        if MOTION_ENABLED:
+            background_tasks.add_task(run_motion_action, item_id, action_name, item)
+        else:
+            log(f"motion disabled; skipping action {action_name} for fixed item {item_id}", level="debug")
+
+    answer = str(item.get("answer") or "").strip() or "好的"
+    return ChatResponse(
+        answer=answer,
+        route=route,
+        latency_ms=int((time.perf_counter() - started_at) * 1000),
+        action=action_name,
+        action_ok=action_ok,
+        expression=expression,
+    )
+
+
+def match_fixed_qa(message: str) -> tuple[str, dict[str, Any]] | None:
+    # 固定回答匹配：
+    # 1. match: exact（如动作指令）：归一化并剥离句尾语气词后整句全等；能力问句需作为单独条目显式配置；
+    # 2. 默认（普通问答）：归一化后做子串匹配。
+    # 多个条目命中时取 pattern 最长的条目，避免短词遮蔽。
     normalized = normalize_for_match(message)
-    for _, item in fixed_qa_items():
-        patterns = (normalize_for_match(str(pattern)) for pattern in item.get("patterns", []))
-        if any(pattern and pattern in normalized for pattern in patterns):
-            return str(item.get("answer", "")).strip() or None
-    return None
+    if not normalized:
+        return None
+    normalized_exact = normalized.rstrip(ACTION_TRAILING_TOKENS)
+
+    best: tuple[int, str, dict[str, Any]] | None = None
+    for item_id, item in fixed_qa_items():
+        is_exact = str(item.get("match") or "").strip().lower() == "exact"
+        patterns = [
+            norm
+            for norm in (normalize_for_match(str(p)) for p in item.get("patterns", []))
+            if norm
+        ]
+        for pattern in patterns:
+            if is_exact:
+                clean_pattern = pattern.rstrip(ACTION_TRAILING_TOKENS)
+                if clean_pattern != normalized_exact:
+                    continue
+            else:
+                if pattern not in normalized:
+                    continue
+
+            match_len = len(pattern)
+            if best is None or match_len > best[0]:
+                best = (match_len, item_id, item)
+
+    if best is None:
+        return None
+    return best[1], best[2]
 
 
 def fixed_qa_catalog() -> list[dict[str, Any]]:
@@ -410,7 +537,11 @@ async def direction_answer() -> str:
     return f"您在我的{direction_label(direction_data.angle_degrees)}。"
 
 
-async def intent_chat_response(message: str, started_at: float) -> ChatResponse | None:
+async def intent_chat_response(
+    message: str,
+    started_at: float,
+    background_tasks: BackgroundTasks,
+) -> ChatResponse | None:
     result = await call_intent_service(message)
     if result is None:
         return None
@@ -431,13 +562,16 @@ async def intent_chat_response(message: str, started_at: float) -> ChatResponse 
             latency_ms=int((time.perf_counter() - started_at) * 1000),
         )
     if intent == "fixed_qa":
-        answer = fixed_qa_answer_by_id(str(result.get("fixed_qa_id") or ""))
-        if not answer:
+        fixed_qa_id = str(result.get("fixed_qa_id") or "")
+        item = fixed_qa_item_by_id(fixed_qa_id)
+        if not item:
             return None
-        return ChatResponse(
-            answer=answer,
+        return await execute_fixed_item(
+            item_id=fixed_qa_id,
+            item=item,
+            started_at=started_at,
             route="fixed_qa_intent",
-            latency_ms=int((time.perf_counter() - started_at) * 1000),
+            background_tasks=background_tasks,
         )
     if intent == "direction":
         return ChatResponse(
@@ -496,7 +630,7 @@ async def direction() -> DirectionResponse:
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
+async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     started_at = time.perf_counter()
     message = request.message.strip()
 
@@ -514,15 +648,18 @@ async def chat(request: ChatRequest) -> ChatResponse:
             latency_ms=int((time.perf_counter() - started_at) * 1000),
         )
 
-    fixed_answer = match_fixed_qa(message)
-    if fixed_answer:
-        return ChatResponse(
-            answer=fixed_answer,
+    matched = match_fixed_qa(message)
+    if matched is not None:
+        item_id, item = matched
+        return await execute_fixed_item(
+            item_id=item_id,
+            item=item,
+            started_at=started_at,
             route="fixed_qa",
-            latency_ms=int((time.perf_counter() - started_at) * 1000),
+            background_tasks=background_tasks,
         )
 
-    intent_response = await intent_chat_response(message, started_at)
+    intent_response = await intent_chat_response(message, started_at, background_tasks)
     if intent_response is not None:
         return intent_response
 

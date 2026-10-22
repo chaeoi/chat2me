@@ -61,6 +61,7 @@ last_event = {
     "ok": False,
     "state": "idle",
     "text": "",
+    "expression": None,
     "seq": 0,
     "changed_at": time.time(),
     "source_status": "not_checked",
@@ -70,6 +71,7 @@ last_event = {
 def apply_event(payload: dict[str, object]) -> None:
     state = str(payload.get("state") or "idle")[:24]
     text = str(payload.get("text") or "")[:DISPLAY_TEXT_MAX_CHARS]
+    expression = str(payload.get("expression") or "").strip() or None
     seq_value = payload.get("seq")
     seq = int(seq_value) if isinstance(seq_value, int) else int(last_event["seq"]) + 1
     with state_lock:
@@ -78,13 +80,14 @@ def apply_event(payload: dict[str, object]) -> None:
                 "ok": True,
                 "state": state,
                 "text": text,
+                "expression": expression,
                 "seq": seq,
                 "changed_at": payload.get("changed_at") or time.time(),
                 "source_status": "ok",
             }
         )
-    display.set_state(state, text)
-    log(f"relay state: {state}", level="debug")
+    display.set_state(state, text, expression=expression)
+    log(f"relay state: {state} expression: {expression}", level="debug")
 
 
 def set_source_error(error: str) -> None:
@@ -120,7 +123,9 @@ def sync_display_state() -> None:
         with state_lock:
             state = str(last_event["state"])
             text = str(last_event["text"])
-        display.set_state(state, text)
+            expression = last_event.get("expression")
+            expression_str = str(expression) if expression else None
+        display.set_state(state, text, expression=expression_str)
 
 
 class RelayHandler(BaseHTTPRequestHandler):

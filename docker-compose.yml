@@ -33,6 +33,7 @@ services:
     volumes:
       - /opt/chat2me/data/config:/app/config
       - /opt/chat2me/data/log:/app/log
+      - /opt/chat2me/motion:/opt/chat2me/motion
     depends_on:
       chat2me-llm:
         condition: service_started

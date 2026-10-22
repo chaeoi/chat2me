@@ -209,16 +209,18 @@ class DisplayClient:
             log(f"display serial resolved: {port}")
         return port
 
-    def set_state(self, state: str, text: str = "") -> None:
+    def set_state(self, state: str, text: str = "", expression: str | None = None) -> None:
         if not self.enabled:
             return
         if time.monotonic() < self._disabled_until:
             return
-        payload = {
+        payload: dict[str, Any] = {
             "state": state,
             "text": text[: self.text_max_chars],
             "ts": int(time.time()),
         }
+        if expression:
+            payload["expression"] = expression
         line = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
         try:
             import serial

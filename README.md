@@ -76,13 +76,60 @@ Compose 服务：
 
 1. 读取 `runtime.env`、`profile.yaml`、`safety.yaml`。
 2. 输入命中 `blocked_keywords` 时直接返回阻断回复。
-3. 对用户文本做空白、标点、唤醒词和“您/你”归一化，优先匹配 `fixed_qa[*].patterns`。
-4. 固定问答未命中时，Core 调用 `chat2me-llm /intent` 做本地意图分类。
-5. 意图分类只允许返回 `blocked`、`fixed_qa`、`direction`、`session_end`、`chat`。
-6. `blocked`、`fixed_qa`、`direction`、`session_end` 由 Core 直接执行；`chat` 才进入通用 LLM。
-7. LLM 输出仍会经过一次安全关键词过滤。
+3. 对用户文本做空白、标点、唤醒词和“您/你”归一化，快速匹配 `fixed_qa[*].patterns`（动作类条目标记 `match: exact` 整句精确匹配；常规问答为子串匹配）。
+4. 快速命中时由 `execute_fixed_item` 返回应答；若包含 `action`，Core 在发送响应后通过后台任务向 Unix socket 派发动作。
+5. 未命中时，Core 调用 `chat2me-llm /intent` 做本地意图分类。
+6. 意图分类返回 `fixed_qa` 时，根据 `fixed_qa_id` 转回 `execute_fixed_item` 统一调度执行动作和应答（真正实现意图路由兜底）。
+7. 意图分类返回 `blocked`、`direction`、`session_end` 由 Core 直接执行；`chat` 进入通用 LLM。
+8. LLM 输出仍会经过一次安全关键词过滤。
 
-意图目录来自 `profile.yaml` 的 `intent_router` 和 `fixed_qa[*].intent`。固定问答建议维护稳定的 `id`，因为意图模型返回的是 `fixed_qa_id`，Core 会用它映射到标准答案。
+意图目录来自 `profile.yaml` 的 `intent_router` 和 `fixed_qa[*].intent`。由于动作与固定问答同层级，意图小模型直接具备动作理解能力，用户说“你能帮我点个头吗”这类口语化变体均可被意图模型捕获并调度执行。
+
+### 机器人动作与表情扩展
+
+机器人动作（motion）与表情（expression）是固定回答体系的附属操作，在 `config/profile.yaml` 的 `fixed_qa` 条目中统一配置：
+
+```yaml
+fixed_qa:
+  - id: look_at
+    intent: "用户要求机器人看向自己、面向自己或转过来。"
+    match: exact               # 整句匹配（支持尾部语气词剔除），避免"你会看我吗"误触发
+    action: look_at
+    needs_direction: true      # 附带声源方向，motion 用它决定头部 yaw
+    patterns: ["看我", "看看我", "面向我", "转过来"]
+    answer: "我在"
+
+  - id: nod
+    intent: "用户要求机器人点头、点个头、做点头动作。"
+    match: exact
+    action: nod
+    patterns: ["点头", "点个头", "点点头"]
+    answer: "好的"
+```
+
+Core 通过 **Unix socket** 调用 motion，请求体固定为：
+
+```json
+{"id": "act-0123456789abcdef", "name": "nod", "params": {}, "preempt": true, "timeout_ms": 5000}
+```
+
+`needs_direction` 为真时 `params` 追加 `direction_deg`（0=正前、顺时针递增）和 `fallback`（`speaker` 或方向不可用时的 `front`）。Core 先返回语音应答，再由后台任务查询方向并派发动作；动作失败或超时只记日志，不会延迟播报。motion 需接受 HTTP 请求、响应 2xx 即可，建议立即返回 `202` 后在后台执行动作。异步派发时响应中的 `action_ok` 为 `null`，表示动作结果尚未确认。
+
+询问“你会点头吗”会回答“会的”并触发点头演示；此句作为精确匹配条目配置，避免依赖意图模型的兜底判断。
+
+相关配置：
+
+```env
+MOTION_ENABLED=1
+MOTION_SOCKET=/opt/chat2me/motion/motion.sock
+MOTION_CONNECT_TIMEOUT_SECONDS=0.3
+MOTION_READ_TIMEOUT_SECONDS=1.0
+MOTION_ACTION_TIMEOUT_MS=5000
+```
+
+`MOTION_ENABLED=0` 时动作调用旁路，条目仅输出文字播报。
+
+同时，表情（expression）通道已全面打通贯穿 `Core -> Speech -> Relay -> ESP32-S3`。若条目未指定 `expression`，系统默认使用正常 `"speaking"` 状态。各层均向后兼容。
 
 ### LLM 路由
 
@@ -337,7 +384,7 @@ services/tts/           TTS 服务
 | `docker-compose.yml` | 六个运行服务、设备挂载、数据卷和健康检查 |
 | `runtime/shared/common.py` | 环境变量、日志、显示串口客户端 |
 | `runtime/shared/voice.py` | 语音模型、远程 ASR/TTS 适配、音频门控、播放、Core 调用 |
-| `services/core/app/main.py` | 安全过滤、固定问答、意图路由、方向查询、LLM 转发 |
+| `services/core/app/main.py` | 安全过滤、动作匹配、固定问答、意图路由、方向查询、LLM 转发 |
 | `services/llm/app/main.py` | Ollama、在线 LLM、意图模型和回落逻辑 |
 | `services/speech/app/main.py` | 唤醒监听、会话循环、状态接口、诊断接口 |
 | `services/speech/app/respeaker.py` | ReSpeaker tuning、DOA/VAD 读取和方向话术 |

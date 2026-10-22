@@ -67,6 +67,7 @@ STATE_LOCK = threading.Lock()
 CURRENT_STATE: dict[str, object] = {
     "state": "idle",
     "text": "",
+    "expression": None,
     "direction": {
         "ok": False,
         "angle_degrees": None,
@@ -87,9 +88,14 @@ class SpeechState(DisplayClient):
     def enabled(self) -> bool:
         return True
 
-    def set_state(self, state: str, text: str = "") -> None:
+    def set_state(self, state: str, text: str = "", expression: str | None = None) -> None:
         text = text[:DISPLAY_TEXT_MAX_CHARS]
-        update_speech_state(state=state, text=text, direction=direction_status(self.audio_source))
+        update_speech_state(
+            state=state,
+            text=text,
+            expression=expression,
+            direction=direction_status(self.audio_source),
+        )
 
 class WakeHandler(BaseHTTPRequestHandler):
     recognizer = None
@@ -406,6 +412,7 @@ def update_speech_state(
     *,
     state: str | None = None,
     text: str | None = None,
+    expression: str | None = None,
     direction: dict[str, object] | None = None,
     force_seq: bool = False,
 ) -> dict[str, object]:
@@ -416,6 +423,9 @@ def update_speech_state(
             changed = True
         if text is not None and CURRENT_STATE["text"] != text:
             CURRENT_STATE["text"] = text
+            changed = True
+        if "expression" in CURRENT_STATE and CURRENT_STATE["expression"] != expression:
+            CURRENT_STATE["expression"] = expression
             changed = True
         if direction is not None:
             normalized = normalize_direction(direction)
