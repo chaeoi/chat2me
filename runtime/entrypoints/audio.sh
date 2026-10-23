@@ -261,31 +261,39 @@ copy_pulse_cookie() {
 configure_speech_audio_output() {
   [ "${VOICE_ROLE:-}" = "chat2me-speech" ] || return 0
 
-  if ! aplay -L 2>/dev/null | grep -Fxq pulse; then
-    echo "PulseAudio ALSA plugin is missing in the speech image" >&2
-    exit 1
+  output_selector=${AUDIO_OUTPUT_DEVICE:-auto}
+  [ "$output_selector" != "auto" ] && [ "$output_selector" != "pulse" ] && return 0
+
+  if aplay -L 2>/dev/null | grep -Fxq pulse; then
+    if [ -n "${PULSE_SERVER:-}" ] && pactl info >/dev/null 2>&1; then
+      export AUDIO_OUTPUT_DEVICE=pulse
+      return 0
+    fi
+
+    for socket in /host-run/user/*/pulse/native /run/user/*/pulse/native; do
+      [ -S "$socket" ] || continue
+      uid=$(basename "$(dirname "$(dirname "$socket")")")
+      cookie="$(find_pulse_cookie "$uid" || true)"
+      [ -n "$cookie" ] || continue
+      cookie_copy="$(copy_pulse_cookie "$cookie" || true)"
+      [ -n "$cookie_copy" ] || continue
+      if PULSE_SERVER="unix:$socket" PULSE_COOKIE="$cookie_copy" pactl info >/dev/null 2>&1; then
+        export PULSE_SERVER="unix:$socket"
+        export PULSE_COOKIE="$cookie_copy"
+        export AUDIO_OUTPUT_DEVICE=pulse
+        return 0
+      fi
+    done
   fi
 
-  for socket in /host-run/user/*/pulse/native /run/user/*/pulse/native; do
-    [ -S "$socket" ] || continue
-    uid="$(basename "$(dirname "$(dirname "$socket")")")"
-    cookie="$(find_pulse_cookie "$uid" || true)"
-    [ -n "$cookie" ] || continue
-    cookie_copy="$(copy_pulse_cookie "$cookie" || true)"
-    [ -n "$cookie_copy" ] || continue
+  if [ "$output_selector" = "pulse" ]; then
+    echo "Error: PulseAudio output requested but not available" >&2
+    return 1
+  fi
 
-    PULSE_SERVER="unix:$socket"
-    PULSE_COOKIE="$cookie_copy"
-    AUDIO_OUTPUT_DEVICE="pulse"
-    export PULSE_SERVER PULSE_COOKIE AUDIO_OUTPUT_DEVICE
-    if pactl info >/dev/null 2>&1; then
-      chat2me_log info "pulse audio output enabled: $socket"
-      return
-    fi
-  done
-
-  echo "PulseAudio output is required but no host PulseAudio socket/cookie was found" >&2
-  exit 1
+  export AUDIO_OUTPUT_DEVICE=default
+  chat2me_log info "PulseAudio not available, falling back to ALSA default"
+  return 0
 }
 
 required_files_ok() {

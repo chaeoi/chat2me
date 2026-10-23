@@ -435,7 +435,7 @@ DISPLAY_SERIAL_BAUD=115200
 ## 运行注意
 
 - `docker-compose.yml` 默认使用 ARM64 镜像，LLM/TTS 服务启用 NVIDIA runtime。
-- `chat2me-speech` 需要访问 `/dev/snd`、`/dev/bus/usb`、宿主机 ALSA 配置和用户 PulseAudio socket。
+- `chat2me-speech` 需要访问 `/dev/snd`、`/dev/bus/usb` 和宿主机 ALSA 配置。`AUDIO_OUTPUT_DEVICE=auto` 优先使用可用的宿主 PulseAudio，否则使用 ALSA `default`；也可显式指定 ALSA 设备。设为 `pulse` 时要求宿主 PulseAudio 可用。
 - `chat2me-relay` 挂载 `/dev` 到 `/host-dev`，用于查找 ESP32 或其他串口外设；不启动 Relay 不影响语音主链路。
 - 在线 LLM/TTS 的可达性由服务后台探活维护，请求路径使用最近一次探活状态。
 - `config/*` 只影响新初始化部署；已经运行过的机器请改 `data/config/*`。
