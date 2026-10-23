@@ -10,9 +10,9 @@ services:
       VOICE_ROLE: chat2me-llm
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      OLLAMA_LLM_LIBRARY: cuda_jetpack5
-      JETSON_JETPACK: "5"
-      LD_LIBRARY_PATH: /usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+      OLLAMA_LLM_LIBRARY: cuda_jetpack6
+      JETSON_JETPACK: "6"
+      LD_LIBRARY_PATH: /usr/lib/ollama:/usr/lib/ollama/cuda_jetpack6:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
     volumes:
       - /opt/chat2me/data/config:/app/config
       - /opt/chat2me/data/log:/app/log
@@ -93,7 +93,7 @@ services:
       VOICE_ROLE: chat2me-tts
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      LD_LIBRARY_PATH: /usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra
+      LD_LIBRARY_PATH: /usr/local/cuda-12.6/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/nvidia
     volumes:
       - /opt/chat2me/data/models:/models
       - /opt/chat2me/data/config:/app/config

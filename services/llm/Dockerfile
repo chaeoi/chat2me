@@ -26,7 +26,7 @@ COPY runtime/shared/common.py ./app/common.py
 COPY services/llm/app ./app
 RUN chmod +x /entrypoint.sh
 
-ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
+ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/lib/ollama/cuda_jetpack6:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     NVIDIA_VISIBLE_DEVICES=all \
     VOICE_ROLE=chat2me-llm \

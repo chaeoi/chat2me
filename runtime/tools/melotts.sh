@@ -46,6 +46,7 @@ mv "$source_dir" /opt/MeloTTS
 rm -rf /tmp/melotts-source
 
 python3 <<'PY'
+from importlib.util import find_spec
 from pathlib import Path
 
 root = Path("/opt/MeloTTS")
@@ -263,7 +264,7 @@ english_text = english_text.replace(
 )
 english.write_text(english_text, encoding="utf-8")
 
-g2p_en = Path("/usr/local/lib/python3.8/dist-packages/g2p_en/g2p.py")
+g2p_en = Path(find_spec("g2p_en").origin).with_name("g2p.py")
 if g2p_en.is_file():
     g2p_en_text = g2p_en.read_text(encoding="utf-8")
     g2p_en_text = g2p_en_text.replace(

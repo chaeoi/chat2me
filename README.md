@@ -4,6 +4,21 @@ Chat2Me 是一套面向机器人本体部署的中文语音交互系统。当前
 
 系统由六个容器组成：`chat2me-speech` 负责唤醒、录音、播放和状态；`chat2me-asr` 负责语音识别；`chat2me-core` 负责编排、安全策略、固定问答和意图路由；`chat2me-llm` 负责本地 Ollama 与在线 OpenAI-compatible 模型的路由；`chat2me-tts` 负责语音合成；`chat2me-relay` 负责把语音状态同步到显示屏等外设。
 
+## 部署环境
+
+GPU 镜像以 m03 的 Jetson AGX Orin 环境为准：宿主 Ubuntu 22.04、JetPack 6 / L4T R36.5、CUDA 12.6。TTS 镜像使用 Python 3.10、NVIDIA PyTorch 2.5 和 cuDNN 9；LLM 使用 Ollama 的 `cuda_jetpack6` 后端。旧版 Ubuntu 20.04 / JetPack 5 TTS 镜像不能用于该环境。
+
+宿主机需要安装 Docker Compose 和 NVIDIA Container Toolkit。Jetson 软件源已配置时，安装并注册 GPU 运行时：
+
+```bash
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+sudo docker info --format '{{range $name, $runtime := .Runtimes}}{{$name}} {{end}}'
+```
+
+最后一条命令的输出应包含 `nvidia`。若 Compose 报 `unknown or invalid runtime name: nvidia`，检查上述宿主配置；若 TTS 报 `GLIBC_2.34 not found`，需要更新为匹配 JetPack 6 的 TTS 镜像。
+
 ## 当前能力
 
 - 中文唤醒词监听，默认 `小江同学`、`小江`。
