@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 import yaml
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 # app.common loads runtime.env at import time.
 from app.common import direction_label, env_bool, env_csv, env_float, env_int, env_value, log
@@ -34,10 +34,10 @@ PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))
 SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))
 
 MOTION_ENABLED = env_bool("MOTION_ENABLED", False)
-MOTION_SOCKET = env_value("MOTION_SOCKET", allow_empty=True, default="/run/chat2me/motion.sock")
+MOTION_SOCKET = env_value("MOTION_SOCKET")
 MOTION_CONNECT_TIMEOUT_SECONDS = env_float("MOTION_CONNECT_TIMEOUT_SECONDS", 0.3)
 MOTION_READ_TIMEOUT_SECONDS = env_float("MOTION_READ_TIMEOUT_SECONDS", 1.0)
-MOTION_ACTION_TIMEOUT_MS = env_int("MOTION_ACTION_TIMEOUT_MS", 5000)
+MOTION_ACTION_TIMEOUT_MS = env_int("MOTION_ACTION_TIMEOUT_MS", 10000)
 
 
 class ChatRequest(BaseModel):
@@ -73,7 +73,7 @@ class DirectionResponse(BaseModel):
     ok: bool
     source: str = "speech"
     raw_angle_degrees: int | None = None
-    angle_degrees: int | None = None
+    angle_degrees: int | None = Field(default=None, ge=0, lt=360)
     sector: str | None = None
     label: str | None = None
     voice_activity: bool | None = None
@@ -256,7 +256,11 @@ async def call_motion(action_name: str, item: dict[str, Any]) -> bool:
         log("motion socket is not configured; skipping action", level="warning")
         return False
 
-    params: dict[str, Any] = {}
+    configured_params = item.get("params", {})
+    if not isinstance(configured_params, dict):
+        log(f"invalid motion params for {action_name}", level="warning")
+        return False
+    params = dict(configured_params)
     if bool(item.get("needs_direction")):
         # speech 把声源方向归一化为 0=正前、顺时针递增，这里原样交给 motion 换算颈部 yaw。
         direction = await fetch_direction()
@@ -285,6 +289,17 @@ async def call_motion(action_name: str, item: dict[str, Any]) -> bool:
         ) as client:
             response = await client.post("/action", json=payload)
             response.raise_for_status()
+            result = response.json()
+            if (
+                response.status_code != 202
+                or not isinstance(result, dict)
+                or result.get("ok") is not True
+                or result.get("status") != "accepted"
+                or result.get("id") != payload["id"]
+                or result.get("action") != action_name
+            ):
+                log(f"motion returned an invalid acceptance for {action_name}", level="warning")
+                return False
     except httpx.HTTPStatusError as exc:
         log(
             f"motion rejected action {action_name}: "
@@ -298,12 +313,15 @@ async def call_motion(action_name: str, item: dict[str, Any]) -> bool:
     except OSError as exc:
         log(f"motion socket unavailable for action {action_name}: {exc}", level="warning")
         return False
+    except (TypeError, ValueError):
+        log(f"invalid motion JSON for {action_name}", level="warning")
+        return False
     return True
 
 
 async def run_motion_action(item_id: str, action_name: str, item: dict[str, Any]) -> None:
     action_ok = await call_motion(action_name, item)
-    log(f"fixed item action triggered: id={item_id} action={action_name} ok={action_ok}")
+    log(f"fixed item action submitted: id={item_id} action={action_name} accepted={action_ok}")
 
 
 async def execute_fixed_item(
@@ -321,6 +339,7 @@ async def execute_fixed_item(
         if MOTION_ENABLED:
             background_tasks.add_task(run_motion_action, item_id, action_name, item)
         else:
+            action_ok = False
             log(f"motion disabled; skipping action {action_name} for fixed item {item_id}", level="debug")
 
     answer = str(item.get("answer") or "").strip() or "好的"
@@ -346,7 +365,7 @@ def match_fixed_qa(message: str) -> tuple[str, dict[str, Any]] | None:
 
     best: tuple[int, str, dict[str, Any]] | None = None
     for item_id, item in fixed_qa_items():
-        is_exact = str(item.get("match") or "").strip().lower() == "exact"
+        is_exact = bool(item.get("action")) or str(item.get("match") or "").strip().lower() == "exact"
         patterns = [
             norm
             for norm in (normalize_for_match(str(p)) for p in item.get("patterns", []))
@@ -373,6 +392,10 @@ def match_fixed_qa(message: str) -> tuple[str, dict[str, Any]] | None:
 def fixed_qa_catalog() -> list[dict[str, Any]]:
     catalog: list[dict[str, Any]] = []
     for item_id, item in fixed_qa_items():
+        # Motion dispatch requires an explicit configured command match. The
+        # classifier can otherwise turn negated or hypothetical speech into motion.
+        if item.get("action"):
+            continue
         patterns = item.get("patterns", [])
         catalog.append(
             {
@@ -453,9 +476,11 @@ def parse_intent_result(content: str) -> dict[str, Any] | None:
     if confidence < INTENT_CONFIDENCE_THRESHOLD:
         return {"intent": "chat", "fixed_qa_id": None, "confidence": confidence}
 
-    if intent == "fixed_qa" and not fixed_qa_answer_by_id(fixed_qa_id_normalized or ""):
-        log(f"intent classifier returned invalid fixed_qa_id: {fixed_qa_id_normalized}", level="warning")
-        return {"intent": "chat", "fixed_qa_id": None, "confidence": confidence}
+    if intent == "fixed_qa":
+        item = fixed_qa_item_by_id(fixed_qa_id_normalized or "")
+        if not item or item.get("action") or not str(item.get("answer") or "").strip():
+            log(f"intent classifier returned unavailable fixed_qa_id: {fixed_qa_id_normalized}", level="warning")
+            return {"intent": "chat", "fixed_qa_id": None, "confidence": confidence}
 
     return {
         "intent": intent,
@@ -527,7 +552,15 @@ async def fetch_direction() -> DirectionResponse:
             error="speech_state_missing_direction",
             updated_at=time.time(),
         )
-    return DirectionResponse(**direction_data)
+    try:
+        return DirectionResponse(**direction_data)
+    except ValidationError:
+        return DirectionResponse(
+            ok=False,
+            source="speech",
+            error="speech_direction_invalid_payload",
+            updated_at=time.time(),
+        )
 
 
 async def direction_answer() -> str:
@@ -564,7 +597,7 @@ async def intent_chat_response(
     if intent == "fixed_qa":
         fixed_qa_id = str(result.get("fixed_qa_id") or "")
         item = fixed_qa_item_by_id(fixed_qa_id)
-        if not item:
+        if not item or item.get("action"):
             return None
         return await execute_fixed_item(
             item_id=fixed_qa_id,

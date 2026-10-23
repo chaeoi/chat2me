@@ -64,6 +64,7 @@ SPEECH_DIAGNOSTIC_TIMEOUT_SECONDS = float(os.getenv("SPEECH_DIAGNOSTIC_TIMEOUT_S
 
 
 STATE_LOCK = threading.Lock()
+_UNSET = object()
 CURRENT_STATE: dict[str, object] = {
     "state": "idle",
     "text": "",
@@ -412,7 +413,7 @@ def update_speech_state(
     *,
     state: str | None = None,
     text: str | None = None,
-    expression: str | None = None,
+    expression: str | None | object = _UNSET,
     direction: dict[str, object] | None = None,
     force_seq: bool = False,
 ) -> dict[str, object]:
@@ -424,7 +425,7 @@ def update_speech_state(
         if text is not None and CURRENT_STATE["text"] != text:
             CURRENT_STATE["text"] = text
             changed = True
-        if "expression" in CURRENT_STATE and CURRENT_STATE["expression"] != expression:
+        if expression is not _UNSET and CURRENT_STATE["expression"] != expression:
             CURRENT_STATE["expression"] = expression
             changed = True
         if direction is not None:

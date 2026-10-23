@@ -12,6 +12,8 @@
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 
 # Local Python environments
@@ -25,6 +27,16 @@ htmlcov/
 
 # Runtime data mounted by docker-compose.yml
 /data
+/log
+/logs
+**/*.sock
+
+# Local build outputs
+/build
+/build-*
+/cmake-build-*
+/dist
+/compile_commands.json
 
 # ESP-IDF display firmware build outputs
 /firmware/display/build

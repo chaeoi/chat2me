@@ -76,14 +76,14 @@ Compose 服务：
 
 1. 读取 `runtime.env`、`profile.yaml`、`safety.yaml`。
 2. 输入命中 `blocked_keywords` 时直接返回阻断回复。
-3. 对用户文本做空白、标点、唤醒词和“您/你”归一化，快速匹配 `fixed_qa[*].patterns`（动作类条目标记 `match: exact` 整句精确匹配；常规问答为子串匹配）。
+3. 对用户文本做空白、标点、唤醒词和“您/你”归一化，快速匹配 `fixed_qa[*].patterns`（带 `action` 的条目强制整句匹配；常规问答为子串匹配）。
 4. 快速命中时由 `execute_fixed_item` 返回应答；若包含 `action`，Core 在发送响应后通过后台任务向 Unix socket 派发动作。
 5. 未命中时，Core 调用 `chat2me-llm /intent` 做本地意图分类。
-6. 意图分类返回 `fixed_qa` 时，根据 `fixed_qa_id` 转回 `execute_fixed_item` 统一调度执行动作和应答（真正实现意图路由兜底）。
+6. 意图分类返回 `fixed_qa` 时，只允许选择不带动作的普通固定问答；动作条目不进入分类目录，也不会通过分类结果触发。
 7. 意图分类返回 `blocked`、`direction`、`session_end` 由 Core 直接执行；`chat` 进入通用 LLM。
 8. LLM 输出仍会经过一次安全关键词过滤。
 
-意图目录来自 `profile.yaml` 的 `intent_router` 和 `fixed_qa[*].intent`。由于动作与固定问答同层级，意图小模型直接具备动作理解能力，用户说“你能帮我点个头吗”这类口语化变体均可被意图模型捕获并调度执行。
+意图目录来自 `profile.yaml` 的 `intent_router` 和不带动作的 `fixed_qa[*].intent`。动作只由配置中的明确整句匹配触发，避免“不要点头”、假设句或模型误判变成实际动作。“你能帮我点个头吗”等允许的口语变体需要列入动作条目的 `patterns`。
 
 ### 机器人动作与表情扩展
 
@@ -110,10 +110,10 @@ fixed_qa:
 Core 通过 **Unix socket** 调用 motion，请求体固定为：
 
 ```json
-{"id": "act-0123456789abcdef", "name": "nod", "params": {}, "preempt": true, "timeout_ms": 5000}
+{"id": "act-0123456789abcdef", "name": "nod", "params": {}, "preempt": true, "timeout_ms": 10000}
 ```
 
-`needs_direction` 为真时 `params` 追加 `direction_deg`（0=正前、顺时针递增）和 `fallback`（`speaker` 或方向不可用时的 `front`）。Core 先返回语音应答，再由后台任务查询方向并派发动作；动作失败或超时只记日志，不会延迟播报。motion 需接受 HTTP 请求、响应 2xx 即可，建议立即返回 `202` 后在后台执行动作。异步派发时响应中的 `action_ok` 为 `null`，表示动作结果尚未确认。
+`needs_direction` 为真时 `params` 追加 `direction_deg`（0=正前、顺时针递增）和 `fallback`（`speaker` 或方向不可用时的 `front`）。Core 先返回语音应答，再由后台任务查询方向并派发动作；动作失败或超时只记日志，不会延迟播报。motion 必须返回 `202`，且 JSON 中 `ok=true`、`status=accepted`、`id` 与 `action` 均与请求一致。此结果仅确认接收轨迹，不表示电机到位。异步派发时 `/chat` 响应的 `action_ok` 为 `null`；关闭动作调用时为 `false`，后台接收结果记录在日志中。
 
 询问“你会点头吗”会回答“会的”并触发点头演示；此句作为精确匹配条目配置，避免依赖意图模型的兜底判断。
 
@@ -121,15 +121,22 @@ Core 通过 **Unix socket** 调用 motion，请求体固定为：
 
 ```env
 MOTION_ENABLED=1
+MOTION_SOCKET_DIR=/opt/chat2me/motion
 MOTION_SOCKET=/opt/chat2me/motion/motion.sock
 MOTION_CONNECT_TIMEOUT_SECONDS=0.3
 MOTION_READ_TIMEOUT_SECONDS=1.0
-MOTION_ACTION_TIMEOUT_MS=5000
+MOTION_ACTION_TIMEOUT_MS=10000
 ```
 
 `MOTION_ENABLED=0` 时动作调用旁路，条目仅输出文字播报。
 
-同时，表情（expression）通道已全面打通贯穿 `Core -> Speech -> Relay -> ESP32-S3`。若条目未指定 `expression`，系统默认使用正常 `"speaking"` 状态。各层均向后兼容。
+UDS 路径没有代码兜底。`MOTION_SOCKET` 必须由 env 显式提供，缺失或为空时 Core 启动报错。`MOTION_SOCKET_DIR` 指定 Compose 在宿主机和容器中挂载的同名绝对目录，必须包含 `MOTION_SOCKET`；两个变量缺失或为空时 Compose 配置解析报错。挂载整个目录可保证 motion 重建 socket 后仍可连接。
+
+Compose 插值从启动环境或项目 `.env` 读取这些变量。若统一使用 `config/runtime.env`，以 `docker compose --env-file config/runtime.env …` 启动；Core 使用 Compose 传入的 `MOTION_SOCKET`，不会再被容器内 `runtime.env` 中的旧路径覆盖。修改自定义路径时也需同步 motion 服务配置中的 `server.socket_path`。
+
+动作条目还可配置 `params` 对象，原样传给 motion。`move_joints` 接受 `left_arm`（7 维）、`right_arm`（7 维）、`head`（3 维）和 `duration_ms`；标定好的自定义动作可直接使用动作名称。motion 统一维护完整 17 关节目标，经 `/throw/arm_joint_command` 交给 `_head.py`，不直接写底层电机话题。部署需使用新版 motion 配置，并让 `_head.py` 处于 disturb 策略的 X-MANUAL 模式。
+
+可选的 `expression` 随 `Core -> Speech -> Relay` 状态传递并写入串口；方向轮询会保留当前表情，切换说话状态时可清除。仓库中的现有显示固件只消费 `state`，指定表情的渲染需要固件支持对应字段，不能仅凭串口传输成功判断已显示。
 
 ### LLM 路由
 
@@ -426,3 +433,17 @@ DISPLAY_SERIAL_BAUD=115200
 - ReSpeaker MicArrayV3 firmware：<https://github.com/respeaker/usb_4_mic_array/tree/master/MicArrayV3_firmware>
 - ReSpeaker `tuning.py`：<https://github.com/respeaker/usb_4_mic_array/blob/master/tuning.py>
 - ReSpeaker `pixel_ring`：<https://github.com/respeaker/pixel_ring>
+
+
+### 动作链路离线回归
+
+测试不会访问机器人。先在相邻的 `chat2me-motion` 仓库构建不含 ROS 的协议测试服务，再运行 Python 测试：
+
+```bash
+cmake -S ../chat2me-motion -B /tmp/chat2me-motion-offline -DCHAT2ME_MOTION_WITH_ROS=OFF
+cmake --build /tmp/chat2me-motion-offline -j2
+python3 -m pip install -r tests/requirements.txt
+MOTION_OFFLINE_SERVER=/tmp/chat2me-motion-offline/motion_offline_server python3 -m pytest -q tests
+```
+
+测试覆盖整句动作触发、否定与假设句、意图模型隔离、后台调度、UDS 请求和接收回执、声源方向参数、表情状态保留。未设置 `MOTION_OFFLINE_SERVER` 时仅跳过跨仓库 UDS 用例，其余用例使用 HTTP 模拟响应。

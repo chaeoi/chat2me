@@ -1,0 +1,2 @@
+-r ../services/core/requirements.txt
+pytest>=8,<10
