@@ -70,36 +70,35 @@ def test_custom_socket_path_comes_from_environment(core, monkeypatch):
     assert loaded.MOTION_SOCKET == "/tmp/custom-motion/commands.sock"
 
 
-def test_compose_uses_required_socket_environment(tmp_path):
+def test_compose_bootstraps_without_socket_environment(tmp_path):
     if not shutil.which("docker"):
         pytest.skip("Docker Compose CLI is required for configuration validation")
-    env_file = tmp_path / "motion.env"
-    env_file.write_text("MOTION_SOCKET_DIR=/tmp/custom-motion\nMOTION_SOCKET=/tmp/custom-motion/commands.sock\n")
+    env_file = tmp_path / "empty.env"
+    env_file.write_text("")
     env = {key: value for key, value in os.environ.items() if key not in {"MOTION_SOCKET", "MOTION_SOCKET_DIR"}}
     result = subprocess.run(
         ["docker", "compose", "--env-file", str(env_file), "-f", str(ROOT / "docker-compose.yml"), "config", "--format", "json"],
         env=env, text=True, capture_output=True, check=True,
     )
     core_config = json.loads(result.stdout)["services"]["chat2me-core"]
-    assert core_config["environment"]["MOTION_SOCKET"] == "/tmp/custom-motion/commands.sock"
-    assert any(volume["source"] == volume["target"] == "/tmp/custom-motion" for volume in core_config["volumes"])
+    assert "MOTION_SOCKET" not in core_config["environment"]
+    assert any(volume["source"] == volume["target"] == "/opt/chat2me/motion" for volume in core_config["volumes"])
 
 
-@pytest.mark.parametrize("missing_key", ["MOTION_SOCKET", "MOTION_SOCKET_DIR"])
-def test_compose_rejects_missing_socket_configuration(tmp_path, missing_key):
-    if not shutil.which("docker"):
-        pytest.skip("Docker Compose CLI is required for configuration validation")
-    values = {"MOTION_SOCKET_DIR": "/tmp/custom-motion", "MOTION_SOCKET": "/tmp/custom-motion/commands.sock"}
-    del values[missing_key]
-    env_file = tmp_path / "incomplete.env"
-    env_file.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
-    env = {key: value for key, value in os.environ.items() if key not in {"MOTION_SOCKET", "MOTION_SOCKET_DIR"}}
-    result = subprocess.run(
-        ["docker", "compose", "--env-file", str(env_file), "-f", str(ROOT / "docker-compose.yml"), "config"],
-        env=env, text=True, capture_output=True,
-    )
-    assert result.returncode != 0
-    assert missing_key in result.stderr
+def test_entrypoint_initializes_runtime_env_and_preserves_existing_values(tmp_path):
+    defaults = tmp_path / "defaults"
+    config = tmp_path / "config"
+    defaults.mkdir()
+    (defaults / "runtime.env").write_text("MOTION_SOCKET=/opt/chat2me/motion/motion.sock\n")
+    env = {**os.environ, "DEFAULT_CONFIG_DIR": str(defaults), "CONFIG_DIR": str(config),
+           "RUNTIME_CONFIG_PATH": str(config / "runtime.env")}
+    command = ['sh', '-c', '. "$1"; chat2me_log() { :; }; init_config',
+               'sh', str(ROOT / "runtime/entrypoints/lib.sh")]
+    subprocess.run(command, env=env, check=True)
+    assert (config / "runtime.env").read_text() == "MOTION_SOCKET=/opt/chat2me/motion/motion.sock\n"
+    (config / "runtime.env").write_text("MOTION_SOCKET=/opt/chat2me/motion/custom.sock\n")
+    subprocess.run(command, env=env, check=True)
+    assert (config / "runtime.env").read_text() == "MOTION_SOCKET=/opt/chat2me/motion/custom.sock\n"
 
 
 @pytest.mark.parametrize("text", ["点头", "点点头吧", "你好，小江，点个头", "你会点头吗", "你能帮我点个头吗"])

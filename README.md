@@ -121,7 +121,6 @@ Core 通过 **Unix socket** 调用 motion，请求体固定为：
 
 ```env
 MOTION_ENABLED=1
-MOTION_SOCKET_DIR=/opt/chat2me/motion
 MOTION_SOCKET=/opt/chat2me/motion/motion.sock
 MOTION_CONNECT_TIMEOUT_SECONDS=0.3
 MOTION_READ_TIMEOUT_SECONDS=1.0
@@ -130,9 +129,9 @@ MOTION_ACTION_TIMEOUT_MS=10000
 
 `MOTION_ENABLED=0` 时动作调用旁路，条目仅输出文字播报。
 
-UDS 路径没有代码兜底。`MOTION_SOCKET` 必须由 env 显式提供，缺失或为空时 Core 启动报错。`MOTION_SOCKET_DIR` 指定 Compose 在宿主机和容器中挂载的同名绝对目录，必须包含 `MOTION_SOCKET`；两个变量缺失或为空时 Compose 配置解析报错。挂载整个目录可保证 motion 重建 socket 后仍可连接。
+Compose 按 motion 安装位置固定挂载 `/opt/chat2me/motion`，首次启动无需预先创建项目 `.env`。容器入口会把缺失的配置文件从镜像复制到 `/opt/chat2me/data/config`，包括含 `MOTION_SOCKET` 的 `runtime.env`，然后 Core 再读取该 env。
 
-Compose 插值从启动环境或项目 `.env` 读取这些变量。若统一使用 `config/runtime.env`，以 `docker compose --env-file config/runtime.env …` 启动；Core 使用 Compose 传入的 `MOTION_SOCKET`，不会再被容器内 `runtime.env` 中的旧路径覆盖。修改自定义路径时也需同步 motion 服务配置中的 `server.socket_path`。
+socket 文件路径仍由 `runtime.env` 中的 `MOTION_SOCKET` 指定，代码没有路径兜底；该项缺失或为空时 Core 启动报错。修改 socket 文件名时也需同步 motion 服务配置中的 `server.socket_path`，并将文件保留在已挂载目录内。已有配置文件会保留，不会被镜像默认值覆盖。
 
 动作条目还可配置 `params` 对象，原样传给 motion。`move_joints` 接受 `left_arm`（7 维）、`right_arm`（7 维）、`head`（3 维）和 `duration_ms`；标定好的自定义动作可直接使用动作名称。motion 统一维护完整 17 关节目标，经 `/throw/arm_joint_command` 交给 `_head.py`，不直接写底层电机话题。部署需使用新版 motion 配置，并让 `_head.py` 处于 disturb 策略的 X-MANUAL 模式。
 

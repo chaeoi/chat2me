@@ -30,13 +30,10 @@ services:
     restart: unless-stopped
     environment:
       VOICE_ROLE: chat2me-core
-      MOTION_SOCKET: ${MOTION_SOCKET:?Set MOTION_SOCKET to the motion Unix socket file}
     volumes:
       - /opt/chat2me/data/config:/app/config
       - /opt/chat2me/data/log:/app/log
-      - type: bind
-        source: ${MOTION_SOCKET_DIR:?Set MOTION_SOCKET_DIR to the motion socket directory}
-        target: ${MOTION_SOCKET_DIR:?Set MOTION_SOCKET_DIR to the motion socket directory}
+      - /opt/chat2me/motion:/opt/chat2me/motion
     depends_on:
       chat2me-llm:
         condition: service_started
