@@ -475,6 +475,11 @@ def listen_for_wake(kws, chunk: int, display: SpeechState) -> str:
     log(f"wake listener active: {wake_words_display()}")
 
     while not matched:
+        if WakeHandler.busy_lock.locked():
+            time.sleep(0.05)
+            stream = kws.create_stream()
+            continue
+
         input_device = wait_for_input_device(display)
         if input_device != logged_input_device:
             log(f"input device: {input_device if input_device is not None else 'default'}")
@@ -487,7 +492,7 @@ def listen_for_wake(kws, chunk: int, display: SpeechState) -> str:
                 device=input_device,
                 blocksize=chunk,
             ) as audio:
-                while not matched:
+                while not matched and not WakeHandler.busy_lock.locked():
                     samples = read_mono(audio, chunk)
                     stream.accept_waveform(SAMPLE_RATE, samples)
                     while kws.is_ready(stream):
