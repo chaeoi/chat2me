@@ -1,7 +1,7 @@
 # ASR 同音替换词库。
 # 添加中文 target；容器启动时会转拼音并生成 /models/homophone/replace.fst。
 rules:
-  - target: "江淮中心"
+  - target: "江淮实验室"
   - target: "江淮前沿技术协同创新中心"
   - target: "安徽合肥"
   - target: "安徽省合肥市"

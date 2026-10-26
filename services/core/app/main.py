@@ -174,7 +174,7 @@ def contains_llm_leak(text: str) -> bool:
 
 
 def leaked_output_response() -> str:
-    return "我可以陪你问答交流，也能介绍江淮中心和机器人相关内容。"
+    return "我可以陪你问答交流，也能介绍江淮实验室和机器人相关内容。"
 
 
 def fixed_qa_id(item: dict[str, Any], index: int) -> str:

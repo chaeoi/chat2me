@@ -7,7 +7,7 @@ from test_motion_integration import ROOT, core, load_module, run
 
 
 @pytest.mark.parametrize("text", [
-    "江淮中心主任是谁", "江淮中心有多少研究员", "谁做的这台相机",
+    "江淮实验室主任是谁", "江淮实验室有多少研究员", "谁做的这台相机",
     "介绍一下空间机器人", "不要点头",
 ])
 def test_unrelated_questions_are_not_captured_by_short_patterns(core, text):
@@ -23,7 +23,7 @@ def test_nod_capability_and_command_share_one_entry(core):
 def test_chat_receives_identity_and_facts_without_action_replies(core, monkeypatch):
     monkeypatch.setattr(core, "profile", lambda: {
         "robot": {"persona": "你是小银"},
-        "fixed_facts": ["你隶属江淮中心"],
+        "fixed_facts": ["你隶属江淮实验室"],
         "fixed_qa": [
             {"answer": "我是机器人"},
             {"action": "nod", "answer": "不要放进资料"},
@@ -31,7 +31,7 @@ def test_chat_receives_identity_and_facts_without_action_replies(core, monkeypat
         "system_prompt": "通常回答100到150字",
     })
     prompt = core.build_chat_prompt()
-    for text in ["你是小银", "你隶属江淮中心", "我是机器人", "通常回答100到150字"]:
+    for text in ["你是小银", "你隶属江淮实验室", "我是机器人", "通常回答100到150字"]:
         assert text in prompt
     assert "不要放进资料" not in prompt
 
