@@ -112,7 +112,7 @@ fixed_qa:
     action: look_at
     needs_direction: true      # 附带声源方向，motion 用它决定头部 yaw
     patterns: ["看我", "看看我", "面向我", "转过来"]
-    answer: "我在"
+    answer: "好的，有什么可以帮你"
 
   - id: nod
     intent: "用户要求机器人点头、点个头、做点头动作。"
