@@ -39,6 +39,14 @@ def test_chat_receives_identity_and_facts_without_action_replies(core, monkeypat
 def test_intent_catalog_omits_fast_match_patterns(core):
     assert all("patterns" not in item for item in core.fixed_qa_catalog())
     assert all(not core.fixed_qa_item_by_id(item["id"]).get("action") for item in core.fixed_qa_catalog())
+    assert all(item["answer"] == core.fixed_qa_item_by_id(item["id"])["answer"] for item in core.fixed_qa_catalog())
+
+
+def test_chat_classification_discards_unrelated_fixed_id(core):
+    result = core.parse_intent_result(json.dumps({
+        "intent": "chat", "fixed_qa_id": "center_research", "confidence": 1,
+    }))
+    assert result == {"intent": "chat", "fixed_qa_id": None, "confidence": 1}
 
 
 @pytest.fixture

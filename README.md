@@ -98,7 +98,7 @@ Compose 服务：
 7. 意图分类返回 `blocked`、`direction`、`session_end` 由 Core 直接执行；`chat` 进入通用 LLM。
 8. 普通聊天同时携带机器人身份、固定资料和回复风格；LLM 输出仍会经过一次安全关键词过滤。
 
-意图目录来自 `profile.yaml` 的 `intent_router` 和不带动作的 `fixed_qa[*].intent`。分类请求使用 JSON schema 约束输出，并预留独立的上下文和输出预算。动作只由配置中的明确整句匹配触发，避免“不要点头”、假设句或模型误判变成实际动作。“你能帮我点个头吗”等允许的口语变体需要列入动作条目的 `patterns`。
+意图目录来自 `profile.yaml` 的 `intent_router` 和不带动作的 `fixed_qa[*].intent`。分类默认与聊天共用 4B 模型，使用 JSON schema 约束输出，并预留独立的上下文和输出预算。目录包含固定答案，只有能完整回答当前问题时才允许命中。动作只由配置中的明确整句匹配触发，避免“不要点头”、假设句或模型误判变成实际动作。“你能帮我点个头吗”等允许的口语变体需要列入动作条目的 `patterns`。
 
 ### 机器人动作与表情扩展
 
@@ -248,7 +248,7 @@ docker compose down
 LLM_ENGINE=ollama
 OLLAMA_MODEL=qwen3:4b-instruct
 INTENT_CLASSIFIER_ENABLED=1
-INTENT_MODEL=qwen3:0.6b
+INTENT_MODEL=qwen3:4b-instruct
 INTENT_NUM_CTX=4096
 INTENT_MAX_TOKENS=128
 OLLAMA_NUM_CTX=4096

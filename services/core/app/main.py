@@ -401,6 +401,7 @@ def fixed_qa_catalog() -> list[dict[str, Any]]:
             {
                 "id": item_id,
                 "intent": str(item.get("intent") or "").strip(),
+                "answer": str(item.get("answer") or "").strip(),
             }
         )
     return catalog
@@ -428,7 +429,9 @@ def build_intent_prompt() -> str:
         "intent 只能是 blocked、fixed_qa、direction、session_end、invalid_input、chat。\n"
         "fixed_qa_id 只能来自目录中 fixed_qa 的 id；非 fixed_qa 时必须为 null。\n"
         "confidence 是 0 到 1 的数字；不确定时返回 intent=chat。\n"
-        "如果用户输入只是语气词、应声、口头填充、噪声转写或没有明确问题/指令，必须返回 invalid_input。\n"
+        "只有纯语气词、应声或无意义噪声才返回 invalid_input；完整问句、问候、拒绝或否定指令不是无效输入。\n"
+        "fixed_qa 必须满足目录中的 answer 能直接、完整回答用户的问题；仅提到相同机构或相同主题不算匹配。\n"
+        "询问资料未提供的人员、人数、日期或参数时返回 chat，不得用简介、研究方向或机构列表代替答案。\n"
         "不要编造 fixed_qa_id；不能确定命中固定问答时返回 chat。\n"
         '例如：{"intent":"chat","fixed_qa_id":null,"confidence":1.0}\n'
         f"意图目录={catalog}"
@@ -478,6 +481,8 @@ def parse_intent_result(content: str) -> dict[str, Any] | None:
         if not item or item.get("action") or not str(item.get("answer") or "").strip():
             log(f"intent classifier returned unavailable fixed_qa_id: {fixed_qa_id_normalized}", level="warning")
             return {"intent": "chat", "fixed_qa_id": None, "confidence": confidence}
+    else:
+        fixed_qa_id_normalized = None
 
     return {
         "intent": intent,
