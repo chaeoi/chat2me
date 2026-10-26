@@ -91,14 +91,14 @@ Compose 服务：
 
 1. 读取 `runtime.env`、`profile.yaml`、`safety.yaml`。
 2. 输入命中 `blocked_keywords` 时直接返回阻断回复。
-3. 对用户文本做空白、标点、唤醒词和“您/你”归一化，快速匹配 `fixed_qa[*].patterns`（带 `action` 的条目强制整句匹配；常规问答为子串匹配）。
+3. 对用户文本做空白、标点、唤醒词和“您/你”归一化，快速匹配 `fixed_qa[*].patterns`（默认 profile 全部使用整句匹配，避免机构名等短词截走具体问题）。
 4. 快速命中时由 `execute_fixed_item` 返回应答；若包含 `action`，Core 在发送响应后通过后台任务向 Unix socket 派发动作。
 5. 未命中时，Core 调用 `chat2me-llm /intent` 做本地意图分类。
 6. 意图分类返回 `fixed_qa` 时，只允许选择不带动作的普通固定问答；动作条目不进入分类目录，也不会通过分类结果触发。
 7. 意图分类返回 `blocked`、`direction`、`session_end` 由 Core 直接执行；`chat` 进入通用 LLM。
-8. LLM 输出仍会经过一次安全关键词过滤。
+8. 普通聊天同时携带机器人身份、固定资料和回复风格；LLM 输出仍会经过一次安全关键词过滤。
 
-意图目录来自 `profile.yaml` 的 `intent_router` 和不带动作的 `fixed_qa[*].intent`。动作只由配置中的明确整句匹配触发，避免“不要点头”、假设句或模型误判变成实际动作。“你能帮我点个头吗”等允许的口语变体需要列入动作条目的 `patterns`。
+意图目录来自 `profile.yaml` 的 `intent_router` 和不带动作的 `fixed_qa[*].intent`。分类请求使用 JSON schema 约束输出，并预留独立的上下文和输出预算。动作只由配置中的明确整句匹配触发，避免“不要点头”、假设句或模型误判变成实际动作。“你能帮我点个头吗”等允许的口语变体需要列入动作条目的 `patterns`。
 
 ### 机器人动作与表情扩展
 
@@ -240,6 +240,8 @@ docker compose down
 | `data/config/safety.yaml` | 输入/输出安全关键词和阻断回复 |
 | `data/config/homophones.yaml` | ASR 同音词替换词库 |
 
+当前默认值适配 ReSpeaker，屏幕 Relay 需用 `docker compose --profile screen up -d` 启用。
+
 常用 LLM 配置：
 
 ```env
@@ -247,6 +249,11 @@ LLM_ENGINE=ollama
 OLLAMA_MODEL=qwen3:4b-instruct
 INTENT_CLASSIFIER_ENABLED=1
 INTENT_MODEL=qwen3:0.6b
+INTENT_NUM_CTX=4096
+INTENT_MAX_TOKENS=128
+OLLAMA_NUM_CTX=4096
+LLM_MAX_TOKENS=384
+CORE_REQUEST_TIMEOUT_SECONDS=210
 ```
 
 在线 LLM 配置：
@@ -272,6 +279,10 @@ ASR_NOISE_GATE_ENABLED=1
 ASR_NOISE_CALIBRATION_SECONDS=0.2
 ASR_PREROLL_SECONDS=0.5
 ```
+
+默认回答约100～150字，语音上限180字、播放超时90秒。`profile.yaml` 决定回答风格，`LLM_MAX_TOKENS` 决定生成预算，`SPEECH_TTS_MAX_CHARS` 决定朗读上限。语音端请求超时需覆盖意图分类和完整生成时间。
+
+ReSpeaker 播放设备为 `plughw:ArrayUAC10,0`，麦克风相对机器人向左偏90度：`RESPEAKER_DOA_FRONT_OFFSET_DEGREES=90`。已按最大音量设置归一化目标和峰值上限为0 dBFS、最大增益1000，实际增益仍受峰值限制。
 
 语音合成配置：
 

@@ -20,7 +20,7 @@ CORE_LLM_URL = "http://chat2me-llm:8082/chat"
 CORE_INTENT_URL = "http://chat2me-llm:8082/intent"
 CORE_LLM_REACHABILITY_URL = "http://chat2me-llm:8082/llm/reachability"
 CORE_LLM_HEALTH_URL = "http://chat2me-llm:8082/health"
-CORE_LLM_TIMEOUT_SECONDS = 180.0
+CORE_LLM_TIMEOUT_SECONDS = env_float("LLM_TIMEOUT_SECONDS", 180) + 5
 CORE_LLM_REACHABILITY_TIMEOUT_SECONDS = 2.0
 CORE_INTENT_TIMEOUT_SECONDS = env_float("INTENT_TIMEOUT_SECONDS", 15)
 INTENT_CLASSIFIER_ENABLED = env_bool("INTENT_CLASSIFIER_ENABLED", True)
@@ -333,6 +333,7 @@ async def execute_fixed_item(
 ) -> ChatResponse:
     action_name = str(item.get("action") or "").strip() or None
     expression = str(item.get("expression") or "").strip() or None
+    log(f"fixed item matched: id={item_id} route={route}")
     action_ok: bool | None = None
 
     if action_name:
@@ -355,7 +356,7 @@ async def execute_fixed_item(
 
 def match_fixed_qa(message: str) -> tuple[str, dict[str, Any]] | None:
     # 固定回答匹配：
-    # 1. match: exact（如动作指令）：归一化并剥离句尾语气词后整句全等；能力问句需作为单独条目显式配置；
+    # 1. match: exact：归一化并剥离句尾语气词后整句全等；
     # 2. 默认（普通问答）：归一化后做子串匹配。
     # 多个条目命中时取 pattern 最长的条目，避免短词遮蔽。
     normalized = normalize_for_match(message)
@@ -396,12 +397,10 @@ def fixed_qa_catalog() -> list[dict[str, Any]]:
         # classifier can otherwise turn negated or hypothetical speech into motion.
         if item.get("action"):
             continue
-        patterns = item.get("patterns", [])
         catalog.append(
             {
                 "id": item_id,
                 "intent": str(item.get("intent") or "").strip(),
-                "patterns": [str(pattern) for pattern in patterns if str(pattern).strip()],
             }
         )
     return catalog
@@ -422,18 +421,16 @@ def intent_catalog() -> dict[str, Any]:
 
 def build_intent_prompt() -> str:
     catalog = json.dumps(intent_catalog(), ensure_ascii=False, separators=(",", ":"))
-    allowed_fixed_ids = [item["id"] for item in fixed_qa_catalog()]
-    allowed_fixed_ids_json = json.dumps(allowed_fixed_ids, ensure_ascii=False, separators=(",", ":"))
     return (
         "你是 Chat2Me 的本地意图分类器，只做意图分类，不回答用户问题。\n"
         "必须只输出一个 JSON 对象，不要输出解释、Markdown 或额外文本。\n"
         "JSON 字段固定为：intent、fixed_qa_id、confidence。\n"
         "intent 只能是 blocked、fixed_qa、direction、session_end、invalid_input、chat。\n"
-        "fixed_qa_id 只能来自 allowed_fixed_qa_ids；非 fixed_qa 时必须为 null。\n"
+        "fixed_qa_id 只能来自目录中 fixed_qa 的 id；非 fixed_qa 时必须为 null。\n"
         "confidence 是 0 到 1 的数字；不确定时返回 intent=chat。\n"
         "如果用户输入只是语气词、应声、口头填充、噪声转写或没有明确问题/指令，必须返回 invalid_input。\n"
         "不要编造 fixed_qa_id；不能确定命中固定问答时返回 chat。\n"
-        f"allowed_fixed_qa_ids={allowed_fixed_ids_json}\n"
+        '例如：{"intent":"chat","fixed_qa_id":null,"confidence":1.0}\n'
         f"意图目录={catalog}"
     )
 
@@ -513,6 +510,8 @@ async def call_intent_service(message: str) -> dict[str, Any] | None:
     result = parse_intent_result(content)
     if result is None:
         log(f"intent classifier returned invalid payload: {content[:200]}", level="warning")
+    else:
+        log(f"intent classified: intent={result['intent']} fixed_qa_id={result['fixed_qa_id']} confidence={result['confidence']}")
     return result
 
 
@@ -621,11 +620,27 @@ async def intent_chat_response(
     return None
 
 
+def build_chat_prompt() -> str:
+    data = profile()
+    robot = data.get("robot", {})
+    parts = [str(robot.get("persona") or "").strip()]
+    facts = [str(fact).strip() for fact in data.get("fixed_facts", []) if str(fact).strip()]
+    # Keep ordinary chat grounded in the same answers as the fixed routes.
+    facts.extend(
+        str(item["answer"]).strip()
+        for _, item in fixed_qa_items()
+        if not item.get("action") and str(item.get("answer") or "").strip()
+    )
+    if facts:
+        parts.append("已知资料（仅在相关时使用）：\n" + "\n".join(dict.fromkeys(facts)))
+    parts.append(str(data.get("system_prompt") or "").strip())
+    return "\n\n".join(part for part in parts if part)
+
+
 async def call_llm_service(request: ChatRequest) -> ChatResponse:
-    system_prompt = str(profile().get("system_prompt", "")).strip()
     payload: dict[str, Any] = {
         "message": request.message.strip(),
-        "system_prompt": system_prompt,
+        "system_prompt": build_chat_prompt(),
     }
     timeout = httpx.Timeout(connect=5.0, read=CORE_LLM_TIMEOUT_SECONDS, write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:

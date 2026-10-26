@@ -1172,6 +1172,7 @@ def handle_conversation_turn(
 
     answer = str(core_result.get("answer", "")).strip()
     route = str(core_result.get("route", "")).strip()
+    log(f"core result: route={route} model={core_result.get('model')} latency_ms={core_result.get('latency_ms')}")
     expression = str(core_result.get("expression") or "").strip() or None
     if route == "invalid_input":
         log(f"invalid input discarded: {command}")

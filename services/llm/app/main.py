@@ -106,6 +106,18 @@ class IntentResponse(BaseModel):
     latency_ms: int
 
 
+INTENT_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "intent": {"type": "string", "enum": ["blocked", "fixed_qa", "direction", "session_end", "invalid_input", "chat"]},
+        "fixed_qa_id": {"type": ["string", "null"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": ["intent", "fixed_qa_id", "confidence"],
+    "additionalProperties": False,
+}
+
+
 class LLMConfigError(Exception):
     pass
 
@@ -279,6 +291,7 @@ async def call_ollama_with_options(
     max_tokens: int,
     num_ctx: int,
     timeout_seconds: float,
+    response_format: dict[str, Any] | None = None,
 ) -> str:
     payload = {
         "model": model,
@@ -293,6 +306,8 @@ async def call_ollama_with_options(
             "num_thread": OLLAMA_NUM_THREAD,
         },
     }
+    if response_format is not None:
+        payload["format"] = response_format
     if OLLAMA_KEEP_ALIVE:
         payload["keep_alive"] = OLLAMA_KEEP_ALIVE
     timeout = httpx.Timeout(connect=LLM_CONNECT_TIMEOUT_SECONDS, read=timeout_seconds, write=10.0, pool=5.0)
@@ -329,6 +344,7 @@ async def call_intent_classifier(message: str, system_prompt: str) -> tuple[str,
         max_tokens=INTENT_MAX_TOKENS,
         num_ctx=INTENT_NUM_CTX,
         timeout_seconds=INTENT_TIMEOUT_SECONDS,
+        response_format=INTENT_RESULT_SCHEMA,
     )
     return content, model
 
