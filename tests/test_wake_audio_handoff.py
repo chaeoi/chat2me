@@ -1,4 +1,5 @@
 import ast
+from contextlib import contextmanager
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -19,6 +20,8 @@ def test_wake_listener_releases_microphone_for_session(initially_busy):
         lock.acquire()
 
     class Audio:
+        device = 24
+
         def __init__(self, **kwargs):
             pass
 
@@ -54,16 +57,24 @@ def test_wake_listener_releases_microphone_for_session(initially_busy):
                           is_ready=lambda stream: reads > 0 and not lock.locked(),
                           decode_stream=lambda stream: None,
                           get_result=lambda stream: "小江")
+
+    @contextmanager
+    def open_input_stream(display, chunk):
+        with Audio() as audio:
+            yield audio
+
     namespace = dict(SpeechState=object, WakeHandler=SimpleNamespace(busy_lock=lock),
-                     sd=SimpleNamespace(InputStream=Audio),
+                     open_input_stream=open_input_stream,
                      time=SimpleNamespace(sleep=sleep, monotonic=lambda: 0),
                      log=lambda *args: None, wake_words_display=lambda: "小江",
-                     wait_for_input_device=lambda display: 24, read_mono=read_mono,
+                     read_mono=read_mono,
                      INPUT_CHANNELS=6, SAMPLE_RATE=16000,
                      SPEECH_WAIT_LOG_SECONDS=1, SPEECH_WAIT_POLL_SECONDS=.1)
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), namespace)
-    display = SimpleNamespace(set_state=lambda *args: pytest.fail("unexpected audio error"))
+    states = []
+    display = SimpleNamespace(set_state=lambda state, *args: states.append(state))
     assert namespace["listen_for_wake"](kws, 1600, display) == "小江"
     assert events == (["release", "open", "read", "close"] if initially_busy else
                       ["open", "read", "close", "release", "open", "read", "close"])
     assert len(streams) >= 2
+    assert states and set(states) == {"idle"}

@@ -284,6 +284,8 @@ ASR_PREROLL_SECONDS=0.5
 
 ReSpeaker 播放设备为 `plughw:ArrayUAC10,0`，麦克风相对机器人向左偏90度：`RESPEAKER_DOA_FRONT_OFFSET_DEGREES=90`。已按最大音量设置归一化目标和峰值上限为0 dBFS、最大增益1000，实际增益仍受峰值限制。
 
+开机后麦克风尚未就绪或 USB 重新连接时，Speech 会在关闭旧录音流后刷新 PortAudio 的设备列表，并重新打开配置的输入设备。录音恢复后 `/state` 会清除 `audio input unavailable` 错误，回到 `idle`。
+
 语音合成配置：
 
 ```env

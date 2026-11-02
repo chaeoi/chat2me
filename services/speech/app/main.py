@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import wave
+from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -64,6 +65,7 @@ SPEECH_DIAGNOSTIC_TIMEOUT_SECONDS = float(os.getenv("SPEECH_DIAGNOSTIC_TIMEOUT_S
 
 
 STATE_LOCK = threading.Lock()
+AUDIO_INPUT_LOCK = threading.RLock()
 _UNSET = object()
 CURRENT_STATE: dict[str, object] = {
     "state": "idle",
@@ -480,18 +482,13 @@ def listen_for_wake(kws, chunk: int, display: SpeechState) -> str:
             stream = kws.create_stream()
             continue
 
-        input_device = wait_for_input_device(display)
-        if input_device != logged_input_device:
-            log(f"input device: {input_device if input_device is not None else 'default'}")
-            logged_input_device = input_device
         try:
-            with sd.InputStream(
-                channels=INPUT_CHANNELS,
-                dtype="float32",
-                samplerate=SAMPLE_RATE,
-                device=input_device,
-                blocksize=chunk,
-            ) as audio:
+            with open_input_stream(display, chunk) as audio:
+                input_device = audio.device
+                if input_device != logged_input_device:
+                    log(f"input device: {input_device if input_device is not None else 'default'}")
+                    logged_input_device = input_device
+                display.set_state("idle")
                 while not matched and not WakeHandler.busy_lock.locked():
                     samples = read_mono(audio, chunk)
                     stream.accept_waveform(SAMPLE_RATE, samples)
@@ -515,11 +512,21 @@ def listen_for_wake(kws, chunk: int, display: SpeechState) -> str:
     return matched
 
 
+def refresh_input_devices() -> None:
+    # PortAudio caches devices at initialization; refresh only with all input streams closed.
+    if sd._initialized:
+        sd._terminate()
+    sd._initialize()
+
+
 def wait_for_input_device(display: SpeechState) -> int | str | None:
     logged_waiting = False
     while True:
         try:
             input_device = select_input_device(INPUT_DEVICE)
+            if input_device is None and INPUT_DEVICE_REQUIRED:
+                refresh_input_devices()
+                input_device = select_input_device(INPUT_DEVICE)
         except Exception as exc:
             input_device = None
             if not logged_waiting:
@@ -573,6 +580,7 @@ def open_session_input(display: SpeechState, chunk: int) -> sd.InputStream:
                 except Exception:
                     pass
             log(f"speech input stream unavailable; retrying: {exc}", level="debug")
+            refresh_input_devices()
             time.sleep(0.25)
 
     if last_error is not None:
@@ -580,11 +588,20 @@ def open_session_input(display: SpeechState, chunk: int) -> sd.InputStream:
     raise RuntimeError("speech input stream unavailable")
 
 
+@contextmanager
+def open_input_stream(display: SpeechState, chunk: int):
+    with AUDIO_INPUT_LOCK:
+        audio = open_session_input(display, chunk)
+        try:
+            yield audio
+        finally:
+            audio.close()
+
+
 def run_session(recognizer, voice, display: SpeechState, beep_path: Path, audio_source) -> None:
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
-    audio = open_session_input(display, chunk)
     voice_activity_probe = getattr(audio_source, "activity_state", None) or getattr(audio_source, "is_voice_active", None)
-    try:
+    with open_input_stream(display, chunk) as audio:
         display.set_state("listening", "wake")
         speak_pausing_input(audio, WAKE_RESPONSE, voice, display)
         drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
@@ -618,8 +635,6 @@ def run_session(recognizer, voice, display: SpeechState, beep_path: Path, audio_
         log("conversation reached max turns")
         speak_pausing_input(audio, SESSION_END_RESPONSE, voice, display)
         display.set_state("idle")
-    finally:
-        audio.close()
 
 
 def main() -> None:
