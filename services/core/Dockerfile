@@ -1,5 +1,10 @@
 FROM python:3.11-slim
 
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+LABEL org.opencontainers.image.version="$VERSION"
+
+
 ARG CHAT2ME_PIP_RETRIES=10
 ARG CHAT2ME_PIP_TIMEOUT=120
 

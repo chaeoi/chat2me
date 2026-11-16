@@ -82,7 +82,7 @@ class DirectionResponse(BaseModel):
     error: str | None = None
 
 
-app = FastAPI(title="Chat2Me Core", version="0.1.0")
+app = FastAPI(title="Chat2Me Core", version=os.getenv("APP_VERSION", "dev"))
 
 
 @app.on_event("startup")

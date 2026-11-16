@@ -337,7 +337,7 @@ async def lifespan(app: FastAPI):
         await shutdown()
 
 
-app = FastAPI(title="Chat2Me TTS", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Chat2Me TTS", version=os.getenv("APP_VERSION", "dev"), lifespan=lifespan)
 
 
 @app.get("/health", response_model=HealthResponse)

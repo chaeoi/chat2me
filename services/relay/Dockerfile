@@ -1,5 +1,10 @@
 FROM python:3.11-slim
 
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+LABEL org.opencontainers.image.version="$VERSION"
+
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     VOICE_ROLE=chat2me-relay \
     PYTHONUNBUFFERED=1 \

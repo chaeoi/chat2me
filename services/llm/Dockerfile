@@ -2,6 +2,11 @@ FROM ollama/ollama:latest AS upstream
 
 FROM ubuntu:24.04
 
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+LABEL org.opencontainers.image.version="$VERSION"
+
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

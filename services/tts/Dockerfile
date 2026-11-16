@@ -96,6 +96,11 @@ from http.client import HTTPException
 import io
 import os
 from pathlib import Path
+
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+LABEL org.opencontainers.image.version="$VERSION"
+
 import time
 import urllib.request
 import zipfile
