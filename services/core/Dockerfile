@@ -1,8 +1,5 @@
 FROM python:3.11-slim
 
-ARG VERSION=dev
-ENV APP_VERSION=$VERSION
-LABEL org.opencontainers.image.version="$VERSION"
 
 
 ARG CHAT2ME_PIP_RETRIES=10
@@ -32,3 +29,7 @@ RUN chmod +x /config.sh
 
 ENTRYPOINT ["/config.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log", "--log-level", "warning"]
+
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+LABEL org.opencontainers.image.version="$VERSION"

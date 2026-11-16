@@ -1,8 +1,5 @@
 FROM ubuntu:20.04
 
-ARG VERSION=dev
-ENV APP_VERSION=$VERSION
-LABEL org.opencontainers.image.version="$VERSION"
 
 
 ARG CHAT2ME_DOWNLOAD_RETRIES=10
@@ -59,3 +56,7 @@ RUN chmod +x /audio.sh
 
 ENTRYPOINT ["/audio.sh"]
 CMD ["python3", "-m", "app.main"]
+
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+LABEL org.opencontainers.image.version="$VERSION"

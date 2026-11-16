@@ -2,9 +2,6 @@ FROM ollama/ollama:latest AS upstream
 
 FROM ubuntu:24.04
 
-ARG VERSION=dev
-ENV APP_VERSION=$VERSION
-LABEL org.opencontainers.image.version="$VERSION"
 
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -39,3 +36,7 @@ ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/lib/ollama/cuda_jetpack6:/usr/local/nvi
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8082", "--no-access-log", "--log-level", "warning"]
+
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+LABEL org.opencontainers.image.version="$VERSION"

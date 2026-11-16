@@ -71,8 +71,8 @@ jobs:
         build-args: |
           VERSION=${{ needs.version.outputs.version }}
           VCS_REF=${{ github.sha }}
-        cache-from: type=gha,scope=chat2me
-        cache-to: type=gha,mode=max,scope=chat2me
+        cache-from: type=gha,scope=${{ matrix.image }}
+        cache-to: type=gha,mode=max,scope=${{ matrix.image }}
     strategy:
       fail-fast: false
       matrix:

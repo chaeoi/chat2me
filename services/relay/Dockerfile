@@ -1,8 +1,5 @@
 FROM python:3.11-slim
 
-ARG VERSION=dev
-ENV APP_VERSION=$VERSION
-LABEL org.opencontainers.image.version="$VERSION"
 
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -28,3 +25,7 @@ RUN chmod +x /config.sh
 
 ENTRYPOINT ["/config.sh"]
 CMD ["python3", "-m", "app.main"]
+
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+LABEL org.opencontainers.image.version="$VERSION"

@@ -97,9 +97,6 @@ import io
 import os
 from pathlib import Path
 
-ARG VERSION=dev
-ENV APP_VERSION=$VERSION
-LABEL org.opencontainers.image.version="$VERSION"
 
 import time
 import urllib.request
@@ -149,3 +146,7 @@ ENV PYTHONPATH=/opt/MeloTTS
 
 ENTRYPOINT ["/audio.sh"]
 CMD ["python3", "-m", "app.main"]
+
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+LABEL org.opencontainers.image.version="$VERSION"
