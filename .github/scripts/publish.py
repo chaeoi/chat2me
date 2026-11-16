@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 
 def gh(*args):
@@ -17,8 +18,19 @@ def number(tag):
 
 
 def releases():
-    pages = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
+    pages = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100&cachebust={time.time_ns()}"))
     return [release for page in pages for release in page]
+
+
+def refreshed_releases(version, published=False):
+    for attempt in range(6):
+        items = releases()
+        current = next((item for item in items if item["tag_name"] == version), None)
+        if current and (not published or not current["draft"]):
+            return items
+        if attempt < 5:
+            time.sleep(min(2 ** attempt, 8))
+    raise RuntimeError(f"release {version} is not yet visible in the GitHub API")
 
 
 def published_versions(items):
@@ -79,14 +91,14 @@ if not existing or existing["draft"]:
     # Draft attachments can be replaced; published attachments are never uploaded again.
     if files:
         gh("release", "upload", version, *(f"dist/{name}" for name in files), "--clobber")
-    existing = next(item for item in releases() if item["tag_name"] == version)
+    existing = next(item for item in refreshed_releases(version) if item["tag_name"] == version)
     validate_assets(existing, local=True)
     gh("release", "edit", version, "--draft=false", "--latest=false")
 else:
     validate_assets(existing)
 
 # Failed-job reruns reuse earlier job outputs, so decide latest here from published releases.
-all_releases = releases()
+all_releases = refreshed_releases(version, published=True)
 promote = number(version) == max(published_versions(all_releases))
 if promote:
     latest = subprocess.run(["gh", "api", f"repos/{repository}/releases/latest"], text=True, capture_output=True)
